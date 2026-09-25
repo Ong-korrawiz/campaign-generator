@@ -1,0 +1,31 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=5000]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.13
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: compile-python
+        name: compile Python sources
+        entry: .venv/bin/python -m compileall -q src tests
+        language: system
+        pass_filenames: false
+      - id: unit-tests
+        name: run offline unit tests
+        entry: .venv/bin/python -m unittest discover -s tests -v
+        language: system
+        pass_filenames: false
