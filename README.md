@@ -51,6 +51,39 @@ Install the hooks after installing the project dependencies:
 
 The hooks check repository hygiene, Ruff linting and formatting, Python compilation, and the offline unit tests.
 
+## Compare brainstorming models with the OpenAI LLM judge
+
+The judge compares base and fine-tuned predictions on the same held-out Zarn
+briefs. Each prediction JSONL row needs a source ID and generated answer, for
+example:
+
+    {"source_id":"zarn_creative_brief_to_asset_plan_test_0001","output":"1. **Idea name** — Description..."}
+
+Use output, response, or raw_response for the answer field. Answer values may
+be text or a JSON object. Base and tuned files must contain the same IDs, and
+those IDs must exist in the held-out test JSONL.
+
+The default run evaluates up to 30 examples, selected round-robin by industry,
+and makes two judge calls per example to check response-order sensitivity:
+
+    PYTHONPATH=src python -m campaign_generator.evaluation.llm_judge \
+      --test-file data/processed/zarn-brainstorm-v1/test.jsonl \
+      --base-predictions artifacts/reports/base_predictions.jsonl \
+      --tuned-predictions artifacts/reports/tuned_predictions.jsonl \
+      --output artifacts/reports/llm_judge.json \
+      --execute
+
+Set OPENAI_API_KEY in .env; the default judge is gpt-6-astra. Choose a
+different model with --model. The report stores the judge model, input hashes,
+prompt hash, token usage, per-example evidence, pairwise preferences, and order
+disagreement. Deterministic checks report the 10-idea count, unique named
+ideas, and presence of prioritization notes. No API calls occur without
+--execute; an existing report path is never overwritten.
+
+The judge currently evaluates the 10-idea brainstorming output. KPI, budget,
+three-concept API checks should be added when the API response schema is
+implemented; the current SFT target does not contain KPI labels.
+
 ## Generate brainstorming-style targets with OpenAI
 
 Zarn's reference outputs are asset plans, while the candidate Brainstorming dataset uses a natural-language request and a numbered list of ten named campaign ideas. The enrichment CLI uses the OpenAI Responses API with Pydantic structured output to convert each Zarn row into that prompt-and-response style. The source brief and split are preserved; generated labels include model and prompt provenance and are not human-verified. A local SQLite cache lets reruns reuse completed rows for the same input, model, and prompt.
