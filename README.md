@@ -2,7 +2,7 @@
 
 A three-day implementation plan for a marketing campaign ideation service. The intended API accepts a structured campaign brief and returns three distinct campaign concepts in English. Two additional days are reserved for integration and delivery issues.
 
-**Project status:** Day 1 data preparation, shared Pydantic schemas, and OpenAI target enrichment are implemented. Model training and the API remain planned work.
+**Project status:** Shared campaign schemas, the dataset_v2 teacher generator, and evaluation scaffold are implemented. Model training and the API remain planned work.
 
 ## Repository structure
 
@@ -15,18 +15,16 @@ campaign-generator/
 │   ├── data.yaml                     # Dataset revisions, filters, and split settings
 │   └── train.yaml                    # Base model, LoRA settings, seed, and output paths
 ├── src/campaign_generator/
-│   ├── data/                         # Preparation, enrichment, and verification
-│   │   ├── pipeline.py               # Download, normalize, filter, and manifest
-│   │   ├── enrich.py                 # OpenAI conversion to Brainstorming SFT
-│   │   └── verify.py                 # Data quality and split checks
+│   ├── dataset_v2/                   # Structured campaign draft generation
+│   ├── io.py                         # Shared JSONL reading and hashing
 │   ├── training/                     # Fine-tuning modules (to be implemented)
 │   ├── evaluation/
 │   │   └── baseline.py               # Base-model inference and metrics
 │   ├── prompts/                      # Shared model prompts
 │   ├── schemas.py                    # Shared data and model contracts
-│   └── constants.py                  # Shared constants
+│   └── __init__.py
 ├── tests/
-│   ├── test_data.py                  # Data shape, deduplication, and split leakage
+│   ├── test_schemas.py               # Shared input and output contracts
 │   └── test_api.py                   # Response shape, constraints, and budget checks
 ├── data/                              # Generated locally; not committed
 │   ├── raw/                           # Version-pinned source snapshots
@@ -40,7 +38,7 @@ campaign-generator/
     └── Test Assignment ... .pdf      # Assignment brief (existing)
 ```
 
-The data package owns dataset preparation and AI-assisted SFT conversion. Training code belongs under training/, while baseline inference and scoring belong under evaluation/. Shared schemas, prompts, and constants stay at package level. The training package is currently a scaffold because fine-tuning code has not been implemented yet. Configuration is separate from code. Downloaded datasets, checkpoints, and generated reports stay out of Git.
+The dataset_v2 package turns validated campaign briefs into reviewable teacher drafts. Training code belongs under training/, while baseline inference and scoring belong under evaluation/. Shared schemas and prompts stay at package level. Generated datasets, checkpoints, and reports stay out of Git.
 
 ## Quality checks
 
@@ -53,8 +51,8 @@ The hooks check repository hygiene, Ruff linting and formatting, Python compilat
 
 ## Compare brainstorming models with the OpenAI LLM judge
 
-The judge compares base and fine-tuned predictions on the same held-out Zarn
-briefs. Each prediction JSONL row needs a source ID and generated answer, for
+The judge compares base and fine-tuned predictions on held-out examples. Each
+prediction JSONL row needs a source ID and generated answer, for
 example:
 
     {"source_id":"zarn_creative_brief_to_asset_plan_test_0001","output":"1. **Idea name** — Description..."}
@@ -67,7 +65,7 @@ The default run evaluates up to 30 examples, selected round-robin by industry,
 and makes two judge calls per example to check response-order sensitivity:
 
     PYTHONPATH=src python -m campaign_generator.evaluation.llm_judge \
-      --test-file data/processed/zarn-brainstorm-v1/test.jsonl \
+      --test-file path/to/brainstorming-compatible/test.jsonl \
       --base-predictions artifacts/reports/base_predictions.jsonl \
       --tuned-predictions artifacts/reports/tuned_predictions.jsonl \
       --output artifacts/reports/llm_judge.json \
@@ -84,30 +82,30 @@ The judge currently evaluates the 10-idea brainstorming output. KPI, budget,
 three-concept API checks should be added when the API response schema is
 implemented; the current SFT target does not contain KPI labels.
 
-## Generate brainstorming-style targets with OpenAI
+## Generate campaign drafts with dataset_v2
 
-Zarn's reference outputs are asset plans, while the candidate Brainstorming dataset uses a natural-language request and a numbered list of ten named campaign ideas. The enrichment CLI uses the OpenAI Responses API with Pydantic structured output to convert each Zarn row into that prompt-and-response style. The source brief and split are preserved; generated labels include model and prompt provenance and are not human-verified. A local SQLite cache lets reruns reuse completed rows for the same input, model, and prompt.
+Each UTF-8 JSONL row contains an id and structured campaign brief. The
+generator uses gpt-6-luna with Pydantic output validation and marks drafts
+pending review. Set OPENAI_API_KEY in the environment or .env.
 
-    cp .env.example .env
-    # Set OPENAI_API_KEY in .env; optionally change OPENAI_MODEL.
-    python -m pip install -e .
-    PYTHONPATH=src python -m campaign_generator.dataset.enrich \
-      --input-dir data/processed/day1-refactor \
-      --output-dir data/processed/zarn-brainstorm-v1 \
-      --split train \
-      --limit-per-split 1
+    make dataset
 
-Remove --limit-per-split to process all rows. Each output must use a new directory. The cache is stored under ignored data/cache/; API cost depends on the selected model and token usage, which the run manifest records.
+For custom inputs and output paths:
+
+    make dataset INPUT=path/to/briefs.jsonl OUTPUT=data/processed/my-run LIMIT=10
+
+The manifest records model, prompt and input hashes, token use, and cache
+information. Review generated labels before using them for training.
 
 ## Data and model workflow
 
-1. Pin the revisions of [Zarn Creative Brief to Asset Plan](https://huggingface.co/datasets/zarnite/zarn-creative-brief-to-asset-plan) and the candidate [Brainstorming Ideation SFT](https://huggingface.co/datasets/stindardlogic/brainstorming-ideation-sft-100k) source.
-2. Convert each usable Zarn brief and asset plan into **one** brainstorming-style campaign concept with its key message, channel roles, and execution plan. Asset-order variants are not separate concepts.
-3. Filter contradictory or unsupported claims, deduplicate, and preserve Zarn's published train/validation/test split. Add Brainstorming examples only if enough distinct, valid marketing cases remain; group duplicates before splitting added examples.
-4. Compare the base Qwen2.5-1.5B-Instruct model with a LoRA/QLoRA adapter trained through Python CLI scripts on Colab. Evaluate both on the same held-out inputs and save the configuration and results.
-5. Generate three concepts with separate inference calls, validate the response, and label KPI targets and budget allocations as proposals. Training examples contain one concept each; producing three is an inference-time behavior.
+1. Prepare diverse briefs across industries, objectives, audiences, channels, and constraints.
+2. Generate candidate campaign directions with dataset_v2 and retain model, prompt, and input provenance.
+3. Review and approve candidates before using them as training labels; split by brief into train, validation, and test.
+4. Train a baseline adapter and compare it with the base model on held-out test inputs.
+5. Implement the campaign API, validate structured responses, and treat KPI or budget suggestions as proposals.
 
-The enrichment stage creates model-generated labels from Zarn references; they remain synthetic and are not human-reviewed. Record the model, prompt, revisions, hashes, and token usage, and report semantic quality as a limitation.
+Teacher outputs are synthetic candidates; review semantic quality before training. Keep model, prompt, source, hashes, and token usage with each dataset run.
 
 ## Planned API contract
 
@@ -124,4 +122,4 @@ The exact JSON field names are defined in schemas.py and shared by training and 
 | 3 | API, response validation, tests, run instructions, and demonstration |
 | 4–5 | Buffer for data, training, or integration issues |
 
-See [the development plan](resource/DEVELOPMENT_PLAN.md) for acceptance criteria and limitations. The OpenAI enrichment command is documented above; commands for remaining planned components will be added as they are implemented.
+See [the development plan](resource/DEVELOPMENT_PLAN.md) for acceptance criteria and limitations. The dataset_v2 generation command is documented above; commands for remaining planned components will be added as they are implemented.

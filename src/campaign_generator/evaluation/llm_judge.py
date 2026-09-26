@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict
 
-from ..dataset.pipeline import read_jsonl, sha256_file
+from ..io import read_jsonl, sha256_file
 from ..prompts.judge import JUDGE_SYSTEM_PROMPT, JUDGE_USER_PROMPT_TEMPLATE
 
 Vote = Literal["A", "B", "tie"]

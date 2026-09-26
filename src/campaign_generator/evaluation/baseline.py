@@ -10,7 +10,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from ..dataset.pipeline import read_jsonl
+from ..io import read_jsonl
 from ..prompts.campaign import SYSTEM_PROMPT, render_user_prompt
 from ..schemas import TrainingRecord, validate_output
 
