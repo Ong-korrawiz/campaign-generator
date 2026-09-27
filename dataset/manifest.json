@@ -1,0 +1,32 @@
+{
+  "dataset": "baseline-v3-description-seed42",
+  "schema_version": 2,
+  "created_at": "2026-09-27T08:16:20.683499+00:00",
+  "seed": 42,
+  "source_dataset": "zarnite/zarn-creative-brief-to-asset-plan + campaign-generator-synthetic-briefs-v1",
+  "source_revision": "4e2c4d87937dcda9604e2e99fb98715da51fab89",
+  "model": "gpt-6-luna",
+  "prompt_version": "brief-to-campaign-description-v2",
+  "prompt_sha256": "b6ba07361551e954afd784fbd000e64de56ed6c017660e9ab3ffb68be270cd6d",
+  "candidate_count": 240,
+  "split_counts": {
+    "train": 168,
+    "validation": 24,
+    "test": 48
+  },
+  "human_semantic_review": false,
+  "review_status": "pending",
+  "cache_hits": 80,
+  "api_input_tokens": 145715,
+  "api_output_tokens": 187134,
+  "synthetic_briefs_sha256": "d43544a643701a463056519567f2dbb8fc5a46d78728b2fb0a3c700569a23728",
+  "drafts_sha256": "3bbcd59d291f3c68ee2159cee20d40b45b2a7b1af1f85a48c9c325c14d4c6cb9",
+  "training_eligibility": "schema_only_experiment",
+  "schema_validation": "passed",
+  "training_files_sha256": {
+    "train": "db129e34ec97a6082b269b6540c9b0f28df8e0c7bcf54f2cefd274cfe4808dfc",
+    "validation": "a0e3af83798818455d9c04c2f143bf08b118e417c8869d2defa66ef2a0dfcede",
+    "test": "c83d8b7b3048b0a296c065cf4fda6fba387a7893557327dfbcd6d7ead2d79a83"
+  },
+  "quality_report_sha256": "6b03f9c01651d73bce7f271783b4b0fab69dd0853e9165932a38160150f4ff2b"
+}

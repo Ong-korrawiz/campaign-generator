@@ -15,9 +15,9 @@ Compare responses A and B for this campaign brief.
 
 Evaluate each criterion independently:
 - goal_alignment: addresses the stated business objective and audience.
-- groundedness: avoids unsupported factual/product claims and respects explicit constraints.
-- idea_distinctness: the set contains meaningfully different concepts, not just wording/channel variants.
-- execution_fit: channel and execution suggestions are plausible and connected to the brief.
+- groundedness: checks that each campaign description uses details from the brief, avoids unsupported factual/product or outcome claims, and respects explicit constraints.
+- idea_distinctness: checks that concepts and their campaign descriptions are meaningfully different, not just wording/channel variants; descriptions should not be interchangeable.
+- execution_fit: checks that descriptions explain a plausible way to use the concept and the role of its channels, connected to the brief.
 
 Then choose an overall winner based on the brief and these criteria. If neither
 response is clearly better, choose tie. Be length-neutral. Provide concise

@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import os
+import random
 import re
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
@@ -104,6 +105,38 @@ def automatic_checks(content: Any, *, expected_ideas: int) -> dict[str, Any]:
             parsed = json.loads(content)
         except json.JSONDecodeError:
             parsed = None
+    if isinstance(parsed, dict) and isinstance(parsed.get("concepts"), list):
+        concepts = parsed["concepts"]
+        names = [
+            str(item.get("campaign_direction", "")).strip().casefold()
+            for item in concepts
+            if isinstance(item, dict)
+        ]
+        descriptions = [
+            str(item.get("campaign_description", "")).strip() for item in concepts if isinstance(item, dict)
+        ]
+        normalized_descriptions = [re.sub(r"\s+", " ", text).casefold() for text in descriptions]
+        sentence_counts = [
+            len([part for part in re.split(r"(?<=[.!?])\s+", description) if part.strip()])
+            for description in descriptions
+        ]
+        return {
+            "format": "structured_concepts",
+            "idea_count": len(concepts),
+            "expected_idea_count": expected_ideas,
+            "idea_count_valid": len(concepts) == expected_ideas,
+            "unique_nonempty_names": bool(names)
+            and len(names) == len(concepts)
+            and all(names)
+            and len(set(names)) == len(names),
+            "campaign_descriptions_present": len(descriptions) == len(concepts) and all(descriptions),
+            "campaign_descriptions_2_to_3_sentences": len(sentence_counts) == len(concepts)
+            and all(2 <= count <= 3 for count in sentence_counts),
+            "campaign_descriptions_distinct": len(normalized_descriptions) == len(concepts)
+            and len(set(normalized_descriptions)) == len(normalized_descriptions),
+            "proposed_kpis_present": len(concepts) == len(parsed["concepts"])
+            and all(isinstance(item, dict) and bool(item.get("proposed_kpis")) for item in concepts),
+        }
     if isinstance(parsed, dict) and isinstance(parsed.get("ideas"), list):
         ideas = parsed["ideas"]
         names = [str(item.get("name", "")).strip().casefold() for item in ideas if isinstance(item, dict)]
@@ -133,6 +166,9 @@ def automatic_checks(content: Any, *, expected_ideas: int) -> dict[str, Any]:
         and all(normalized_names)
         and len(set(normalized_names)) == len(normalized_names),
         "prioritization_notes_present": bool(re.search(r"priorit", text, flags=re.IGNORECASE)),
+        "campaign_descriptions_present": False,
+        "campaign_descriptions_2_to_3_sentences": False,
+        "proposed_kpis_present": False,
     }
 
 
@@ -222,6 +258,32 @@ def metric_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return summaries
 
 
+def overall_promotion_metrics(
+    rows: list[dict[str, Any]], *, seed: int = 42, samples: int = 10_000
+) -> dict[str, Any]:
+    """Compute net preference and percentile bootstrap CI over paired briefs."""
+    outcomes = [row["judgments"]["overall"]["winner"] for row in rows]
+    outcomes = [item for item in outcomes if item in ("base", "tuned", "tie")]
+    if not outcomes:
+        return {"net_win_percentage_points": None, "bootstrap_95_ci": None, "resolved_count": 0}
+
+    def net(values: list[str]) -> float:
+        return 100.0 * (values.count("tuned") - values.count("base")) / len(values)
+
+    rng = random.Random(seed)
+    estimates = sorted(net([rng.choice(outcomes) for _ in outcomes]) for _ in range(samples))
+    return {
+        "net_win_percentage_points": net(outcomes),
+        "bootstrap_95_ci": [
+            estimates[int(0.025 * samples)],
+            estimates[min(samples - 1, int(0.975 * samples))],
+        ],
+        "resolved_count": len(outcomes),
+        "bootstrap_samples": samples,
+        "bootstrap_seed": seed,
+    }
+
+
 def prompt_fingerprint() -> str:
     """Hash exact judge prompt text for reproducibility."""
     content = JUDGE_SYSTEM_PROMPT + "\n" + JUDGE_USER_PROMPT_TEMPLATE
@@ -237,6 +299,7 @@ def run_evaluation(
     model: str,
     expected_ideas: int,
     limit: int | None,
+    task_mode: str = "ideas",
 ) -> dict[str, Any]:
     """Run deterministic checks and two order-swapped judgments per example."""
     if output_file.exists():
@@ -315,7 +378,11 @@ def run_evaluation(
     report = {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "judge": {"provider": "openai", "model": model, "store": False},
-        "task": {"name": "brainstorming_pairwise", "expected_ideas": expected_ideas},
+        "task": {
+            "name": "campaign_concepts_pairwise" if task_mode == "concepts" else "brainstorming_pairwise",
+            "mode": task_mode,
+            "expected_ideas": expected_ideas,
+        },
         "inputs": {
             "test_file": str(test_file),
             "test_sha256": sha256_file(test_file),
@@ -330,16 +397,68 @@ def run_evaluation(
         "judge_token_usage": dict(token_usage),
         "metrics": {
             "pairwise": metric_summary(rows),
+            "promotion": overall_promotion_metrics(rows),
             "automatic_shape": {
                 model_key: {
-                    key: sum(bool(row["automatic"][model_key][key]) for row in rows) / len(rows)
-                    for key in ("idea_count_valid", "unique_nonempty_names", "prioritization_notes_present")
+                    key: sum(bool(row["automatic"][model_key].get(key, False)) for row in rows) / len(rows)
+                    for key in (
+                        (
+                            "idea_count_valid",
+                            "unique_nonempty_names",
+                            "campaign_descriptions_present",
+                            "campaign_descriptions_2_to_3_sentences",
+                            "campaign_descriptions_distinct",
+                            "proposed_kpis_present",
+                        )
+                        if task_mode == "concepts"
+                        else ("idea_count_valid", "unique_nonempty_names", "prioritization_notes_present")
+                    )
                 }
                 for model_key in ("base", "tuned")
             },
         },
         "results": rows,
     }
+    if task_mode == "concepts":
+        required = (
+            "idea_count_valid",
+            "unique_nonempty_names",
+            "campaign_descriptions_present",
+            "campaign_descriptions_2_to_3_sentences",
+            "campaign_descriptions_distinct",
+            "proposed_kpis_present",
+        )
+        format_rates = {
+            model_key: sum(
+                all(bool(row["automatic"][model_key].get(key, False)) for key in required) for row in rows
+            )
+            / len(rows)
+            for model_key in ("base", "tuned")
+        }
+        rubric_net = {
+            criterion: 100.0
+            * (
+                report["metrics"]["pairwise"][criterion]["tuned_wins"]
+                - report["metrics"]["pairwise"][criterion]["base_wins"]
+            )
+            / len(rows)
+            for criterion in CRITERIA
+        }
+        promotion = report["metrics"]["promotion"]
+        ci = promotion.get("bootstrap_95_ci") or [None, None]
+        report["metrics"]["format_pass_rate"] = format_rates
+        report["metrics"]["rubric_net_percentage_points"] = rubric_net
+        report["promotion_gate"] = {
+            "net_win_at_least_10_points": (promotion.get("net_win_percentage_points") or 0) >= 10,
+            "bootstrap_ci_excludes_zero": ci[0] is not None and ci[0] > 0,
+            "format_pass_at_least_98_percent": format_rates["tuned"] >= 0.98,
+            "format_pass_not_below_base": format_rates["tuned"] >= format_rates["base"],
+            "critical_rubric_not_down_more_than_2_points": all(
+                rubric_net[key] >= -2 for key in ("goal_alignment", "groundedness", "execution_fit")
+            ),
+            "human_review": "pending",
+            "ready_to_promote": False,
+        }
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_file.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return report
@@ -354,6 +473,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--model", default="gpt-6-astra")
     parser.add_argument("--expected-ideas", type=int, default=10)
+    parser.add_argument("--mode", choices=("ideas", "concepts"), default="ideas")
     parser.add_argument("--limit", type=int, default=30, help="Maximum examples; round-robin by industry.")
     parser.add_argument("--execute", action="store_true", help="Authorize OpenAI judge API calls.")
     args = parser.parse_args()
@@ -370,6 +490,7 @@ def main() -> None:
         model=args.model,
         expected_ideas=args.expected_ideas,
         limit=args.limit,
+        task_mode=args.mode,
     )
     print(json.dumps(report["metrics"], ensure_ascii=False, indent=2))
 

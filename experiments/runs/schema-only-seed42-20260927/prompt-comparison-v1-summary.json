@@ -1,0 +1,14 @@
+{
+  "training": {
+    "json_valid": 12,
+    "schema_valid": 11,
+    "channel_valid": 10,
+    "total": 12
+  },
+  "api_first": {
+    "json_valid": 4,
+    "schema_valid": 0,
+    "channel_valid": 0,
+    "total": 12
+  }
+}

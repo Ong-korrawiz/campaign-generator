@@ -1,6 +1,4 @@
 serviceAccount: ${TRAINING_SERVICE_ACCOUNT}
-baseOutputDirectory:
-  outputUriPrefix: ${OUTPUT_URI}
 scheduling:
   strategy: SPOT
   timeout: 14400s
@@ -12,11 +10,13 @@ workerPoolSpecs:
       acceleratorCount: 1
     containerSpec:
       imageUri: ${TRAINING_IMAGE_URI}
+      command:
+        - python
+        - -m
+        - campaign_generator.evaluation.predict_concepts
       args:
-        - --dataset-uri=${DATASET_URI}
-        - --output-uri=${OUTPUT_URI}
-        - --run-id=${RUN_ID}
-        - --work-dir=/tmp/campaign-training
-      env:
-        - name: CODE_COMMIT
-          value: ${CODE_COMMIT}
+        - --test-file=${TEST_FILE_URI}
+        - --output=${OUTPUT_URI}
+        - --limit=36
+        - --execute
+${ADAPTER_ARG}

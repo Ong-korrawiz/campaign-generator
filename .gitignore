@@ -5,6 +5,8 @@ __pycache__/
 *.egg-info/
 data/
 artifacts/
+doc/
+submission/*.zip
 .env
 resource/
 .terraform/

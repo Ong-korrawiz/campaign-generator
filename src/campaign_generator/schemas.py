@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from decimal import Decimal
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError, model_validator
@@ -35,16 +36,21 @@ class CampaignBrief(StrictModel):
 
 
 class ApiCampaignBrief(CampaignBrief):
-    """Campaign brief accepted by the planned API when budget is supplied."""
+    """Campaign brief accepted by the public API with an optional complete budget range."""
 
-    budget_min: float = Field(ge=0, allow_inf_nan=False)
-    budget_max: float = Field(ge=0, allow_inf_nan=False)
-    currency: NonEmptyText
+    budget_min: Decimal | None = Field(default=None, ge=0, allow_inf_nan=False)
+    budget_max: Decimal | None = Field(default=None, ge=0, allow_inf_nan=False)
+    currency: NonEmptyText | None = None
 
     @model_validator(mode="after")
     def check_budget_range(self) -> ApiCampaignBrief:
-        """Reject a maximum budget below the minimum budget."""
-        if self.budget_max < self.budget_min:
+        """Require budget fields together and reject a reversed range."""
+        if not self.channels:
+            raise ValueError("channels_required")
+        supplied = (self.budget_min is not None, self.budget_max is not None, self.currency is not None)
+        if any(supplied) and not all(supplied):
+            raise ValueError("budget_fields_must_be_supplied_together")
+        if self.budget_min is not None and self.budget_max is not None and self.budget_max < self.budget_min:
             raise ValueError("invalid_budget_range")
         return self
 
@@ -66,35 +72,49 @@ class AssetPlanItem(StrictModel):
     reason: str = ""
 
 
-class CampaignDirection(StrictModel):
-    """One SFT target; KPI and budget estimates are intentionally absent."""
+class CampaignDirectionV2(StrictModel):
+    """Description-aware SFT target; KPI and budget estimates are absent."""
 
     campaign_direction: NonEmptyText
+    campaign_description: NonEmptyText
     audience_insight: NonEmptyText
     key_message: NonEmptyText
     channel_plan: list[ChannelPlanItem] = Field(min_length=1)
     asset_plan: list[AssetPlanItem] = Field(min_length=1)
 
 
-class BrainstormIdea(StrictModel):
-    """One named campaign idea with a concise creative and execution description."""
+class ProposedKPI(StrictModel):
+    """Proposed, unverified KPI target for one concept."""
 
-    name: NonEmptyText
-    description: NonEmptyText
+    metric: NonEmptyText
+    target: NonEmptyText
+    rationale: NonEmptyText
 
 
-class BrainstormingSet(StrictModel):
-    """Brainstorming-style target matching the candidate dataset's ten-idea format."""
+class BudgetAllocationItem(StrictModel):
+    """Proposed channel allocation within one concept's optional budget."""
 
-    ideas: list[BrainstormIdea] = Field(min_length=10, max_length=10)
-    prioritization_notes: NonEmptyText
+    channel: NonEmptyText
+    amount: Decimal = Field(ge=0, allow_inf_nan=False)
+
+
+class CampaignConcept(CampaignDirectionV2):
+    """One public API concept with proposals separate from the training label."""
+
+    proposed_kpis: list[ProposedKPI] = Field(min_length=1)
+    budget_allocation: list[BudgetAllocationItem] = Field(default_factory=list)
+
+
+class CampaignGenerationResponse(StrictModel):
+    """Public API response containing exactly three distinct concepts."""
+
+    concepts: list[CampaignConcept] = Field(min_length=3, max_length=3)
 
     @model_validator(mode="after")
-    def check_unique_idea_names(self) -> BrainstormingSet:
-        """Reject repeated campaign names within one brainstorm."""
-        names = [idea.name.casefold() for idea in self.ideas]
-        if len(set(names)) != len(names):
-            raise ValueError("duplicate_idea_names")
+    def check_concepts(self) -> CampaignGenerationResponse:
+        names = [concept.campaign_direction.casefold().strip() for concept in self.concepts]
+        if len(set(names)) != 3:
+            raise ValueError("duplicate_campaign_directions")
         return self
 
 
@@ -125,39 +145,20 @@ class TransformationInfo(StrictModel):
     prompt_sha256: NonEmptyText
 
 
-class TrainingRecord(StrictModel):
-    """Complete normalized example written to the split JSONL files."""
+class TrainingRecordV2(StrictModel):
+    """Description-aware SFT record used by dataset v3."""
 
     id: NonEmptyText
     source: SourceInfo
     input: CampaignBrief
-    output: CampaignDirection
+    output: CampaignDirectionV2
     messages: list[ChatMessage] = Field(min_length=3, max_length=3)
     transformation: TransformationInfo | None = None
 
     @model_validator(mode="after")
-    def check_message_roles(self) -> TrainingRecord:
-        """Preserve the system, user, assistant order required by the trainer."""
+    def check_message_roles(self) -> TrainingRecordV2:
         if [message.role for message in self.messages] != ["system", "user", "assistant"]:
             raise ValueError("invalid_messages")
-        return self
-
-
-class BrainstormingTrainingRecord(StrictModel):
-    """SFT record using the candidate brainstorming dataset's user/assistant shape."""
-
-    id: NonEmptyText
-    source: SourceInfo
-    input: CampaignBrief
-    output: BrainstormingSet
-    messages: list[ChatMessage] = Field(min_length=2, max_length=2)
-    transformation: TransformationInfo
-
-    @model_validator(mode="after")
-    def check_message_roles(self) -> BrainstormingTrainingRecord:
-        """Require a user prompt followed by the assistant's ten-idea response."""
-        if [message.role for message in self.messages] != ["user", "assistant"]:
-            raise ValueError("invalid_brainstorming_messages")
         return self
 
 
@@ -180,6 +181,10 @@ def validate_brief(brief: Any, *, api_request: bool = False) -> list[str]:
             field = issue["loc"][0] if issue["loc"] else ""
             if "invalid_budget_range" in str(issue["msg"]):
                 errors.append("invalid_budget_range")
+            elif "budget_fields_must_be_supplied_together" in str(issue["msg"]):
+                errors.append("incomplete_budget")
+            elif "channels_required" in str(issue["msg"]):
+                errors.append("missing_channels")
             elif field in ("industry", "target_audience", "objective", "currency") and issue["type"] in (
                 "missing",
                 "string_too_short",
@@ -190,12 +195,12 @@ def validate_brief(brief: Any, *, api_request: bool = False) -> list[str]:
         return list(dict.fromkeys(errors))
 
 
-def validate_output(output: Any) -> list[str]:
-    """Return stable output error codes from the nested Pydantic contract."""
+def validate_output_v2(output: Any) -> list[str]:
+    """Validate the version 2 campaign direction, including its description."""
     if not isinstance(output, dict):
         return ["output_not_object"]
     try:
-        CampaignDirection.model_validate(output)
+        CampaignDirectionV2.model_validate(output)
         return []
     except ValidationError as exc:
         errors: list[str] = []
@@ -203,32 +208,8 @@ def validate_output(output: Any) -> list[str]:
             field = issue["loc"][0] if issue["loc"] else ""
             if field in ("channel_plan", "asset_plan"):
                 errors.append(f"invalid_{field}_item" if len(issue["loc"]) > 1 else f"missing_{field}")
-            elif field in ("campaign_direction", "audience_insight", "key_message") and issue["type"] in (
-                "missing",
-                "string_too_short",
-            ):
+            elif field in ("campaign_direction", "campaign_description", "audience_insight", "key_message"):
                 errors.append(f"missing_{field}")
             else:
                 errors.append(f"invalid_{field or 'output'}")
         return list(dict.fromkeys(errors))
-
-
-def validate_training_record(record: Any) -> list[str]:
-    """Check a complete JSONL record and preserve legacy error categories."""
-    if not isinstance(record, dict):
-        return ["record_not_object"]
-    errors = validate_brief(record.get("input")) + validate_output(record.get("output"))
-    try:
-        TrainingRecord.model_validate(record)
-    except ValidationError as exc:
-        for issue in exc.errors():
-            field = issue["loc"][0] if issue["loc"] else ""
-            if field == "source":
-                errors.append("invalid_source")
-            elif field == "messages" or "invalid_messages" in str(issue["msg"]):
-                errors.append("invalid_messages")
-            elif field == "id":
-                errors.append("invalid_id")
-            elif field not in ("input", "output"):
-                errors.append("invalid_record")
-    return list(dict.fromkeys(errors))

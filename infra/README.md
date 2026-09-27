@@ -1,6 +1,6 @@
 # Campaign Generator Infrastructure
 
-The infrastructure is split into three Terraform states so the state bucket can be created before the remote backends and the inference image can be built before Cloud Run is deployed.
+The infrastructure is split into bootstrap, platform, private serving, and public API Terraform states so each dependency can be created before the next service is deployed.
 
 ## Target
 
@@ -61,11 +61,27 @@ gcloud ai custom-jobs create \
 
 The template uses one Spot L4. Training code must checkpoint to `OUTPUT_URI` because Spot workers can be preempted.
 
-Run the CPU-only permissions smoke test with:
+Build the pinned trainer image with `make build-training`. The v3 generator
+uploads drafts to GCS staging automatically. `make dataset-v3-schema-only`
+validates the splits and uploads an immutable training version; this keeps
+semantic review pending and is not promotion-ready. `make upload-dataset`
+retries a failed upload. The training job
+reads only train/validation; test remains reserved for final evaluation.
+
+## Public API
+
+After private inference is deployed, build and deploy the public CPU service:
 
 ```bash
-make submit-training-smoke PROJECT_ID="$PROJECT_ID" REGION="$REGION"
+make build-api PROJECT_ID="$PROJECT_ID" REGION="$REGION"
+make deploy-api PROJECT_ID="$PROJECT_ID" REGION="$REGION" IMAGE_DIGEST="<api-image-digest>"
+make verify-api PROJECT_ID="$PROJECT_ID" REGION="$REGION"
 ```
+
+Terraform creates a separate `campaign-generator/api` state and exposes only
+the API. The serving stack grants `campaign-api` `roles/run.invoker` on the
+private inference service. The API uses the inference service base URL for
+both the HTTP endpoint and Google identity-token audience.
 
 ## Cleanup
 

@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Campaign concept demo</title>
+  <style>
+    :root { color-scheme: light; font: 16px/1.5 system-ui, sans-serif; color: #172b36; background: #f5f8f7; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    header { background: #123d3b; color: #fff; padding: 2.6rem max(1.2rem, calc((100vw - 1120px)/2)); }
+    header p { max-width: 700px; margin-bottom: 0; color: #d4e8e2; }
+    h1 { font-size: clamp(2rem, 5vw, 3.2rem); line-height: 1.12; margin: .2rem 0 .8rem; }
+    h2 { margin: 0 0 .7rem; font-size: 1.45rem; }
+    h3 { margin: 0 0 .4rem; font-size: 1.3rem; }
+    main { max-width: 1120px; margin: 2rem auto 4rem; padding: 0 1.2rem; display: grid; gap: 2rem; grid-template-columns: minmax(290px, 390px) minmax(0, 1fr); align-items: start; }
+    .panel, .concept { background: #fff; border: 1px solid #dce7e3; border-radius: 14px; box-shadow: 0 6px 26px #173d3910; }
+    .panel { padding: 1.4rem; }
+    .hint, small { color: #526b69; }
+    label { display: block; font-weight: 650; margin-top: .9rem; }
+    input, textarea { display: block; width: 100%; margin-top: .3rem; padding: .65rem .7rem; border: 1px solid #b5c8c3; border-radius: 8px; font: inherit; color: inherit; background: #fff; }
+    textarea { min-height: 4.3rem; resize: vertical; }
+    input:focus, textarea:focus { outline: 3px solid #bfe2d7; border-color: #216f64; }
+    .two { display: grid; grid-template-columns: 1fr 1fr; gap: .7rem; }
+    button { margin-top: 1.3rem; width: 100%; padding: .8rem 1rem; border: 0; border-radius: 9px; background: #c7f36b; color: #16331e; font: inherit; font-weight: 750; cursor: pointer; }
+    button:hover { background: #b5e557; }
+    button:disabled { opacity: .6; cursor: wait; }
+    #status { min-height: 1.5rem; margin-top: 1rem; }
+    .results { display: grid; gap: 1rem; }
+    .concept { padding: 1.5rem; }
+    .tag { display: inline-block; color: #1b6258; font-size: .8rem; font-weight: 750; text-transform: uppercase; letter-spacing: .08em; margin-bottom: .5rem; }
+    .block { margin-top: 1rem; }
+    .block strong { display: block; margin-bottom: .2rem; }
+    ul { padding-left: 1.2rem; margin: .3rem 0; }
+    .empty { border: 1px dashed #a8c2b9; border-radius: 14px; padding: 2rem; color: #526b69; }
+    @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="tag" style="color:#c7f36b">Marketing campaign ideation</div>
+    <h1>Three directions from one brief.</h1>
+    <p>Explore campaign concepts with distinct angles, key messages, channel roles, proposed KPIs, and an optional budget plan. These are AI-generated drafts; review factual claims and brand fit before use.</p>
+  </header>
+  <main>
+    <section class="panel" aria-labelledby="brief-title">
+      <h2 id="brief-title">Campaign brief</h2>
+      <p class="hint">The first request may take 2–3 minutes while GPU inference starts.</p>
+      <form id="brief-form">
+        <label for="industry">Industry</label><input id="industry" required value="productivity software">
+        <label for="brand">Brand</label><input id="brand" value="Northstar Notes">
+        <label for="product">Product or service</label><input id="product" value="meeting notes app">
+        <label for="audience">Target audience</label><input id="audience" required value="team leads">
+        <label for="objective">Campaign objective</label><input id="objective" required value="increase qualified trial sign-ups">
+        <label for="proof">Verified product fact</label><textarea id="proof">The app turns meeting notes into assigned action items.</textarea>
+        <label for="channels">Allowed channels <small>(comma separated)</small></label><input id="channels" required value="LinkedIn, Email">
+        <label for="constraints">Constraints <small>(one per line)</small></label><textarea id="constraints">Do not claim guaranteed time savings.</textarea>
+        <div class="two">
+          <div><label for="budget-min">Budget minimum</label><input id="budget-min" type="number" min="0" step="any" placeholder="Optional"></div>
+          <div><label for="budget-max">Budget maximum</label><input id="budget-max" type="number" min="0" step="any" placeholder="Optional"></div>
+        </div>
+        <label for="currency">Currency <small>(if budget supplied)</small></label><input id="currency" value="THB">
+        <button type="submit" id="submit">Generate concepts</button>
+        <p id="status" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+    <section aria-labelledby="results-title">
+      <h2 id="results-title">Concepts</h2>
+      <div id="results" class="results"><div class="empty">Complete the brief and generate three campaign directions.</div></div>
+    </section>
+  </main>
+  <script>
+    const form = document.querySelector('#brief-form');
+    const results = document.querySelector('#results');
+    const status = document.querySelector('#status');
+    const button = document.querySelector('#submit');
+    const field = id => document.getElementById(id).value.trim();
+    const add = (parent, tag, value, className) => {
+      const element = document.createElement(tag);
+      if (className) element.className = className;
+      element.textContent = value;
+      parent.append(element);
+      return element;
+    };
+    const block = (card, title, value) => {
+      const wrapper = add(card, 'div', '', 'block');
+      add(wrapper, 'strong', title);
+      add(wrapper, 'div', value);
+    };
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      const brief = {
+        industry: field('industry'), brand: field('brand'), product: field('product'),
+        target_audience: field('audience'), objective: field('objective'), proof_point: field('proof'),
+        channels: field('channels').split(',').map(x => x.trim()).filter(Boolean),
+        constraints: field('constraints').split('\n').map(x => x.trim()).filter(Boolean)
+      };
+      if (field('budget-min') || field('budget-max')) {
+        brief.budget_min = Number(field('budget-min'));
+        brief.budget_max = Number(field('budget-max'));
+        brief.currency = field('currency');
+      }
+      button.disabled = true;
+      results.replaceChildren();
+      status.textContent = 'Generating three concepts…';
+      const started = Date.now();
+      const timer = setInterval(() => {
+        status.textContent = `Generating three concepts… ${Math.floor((Date.now() - started) / 1000)} seconds elapsed`;
+      }, 1000);
+      try {
+        const response = await fetch('/generate', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(brief) });
+        const data = await response.json();
+        if (!response.ok) throw new Error(`HTTP ${response.status}: ${data.detail || 'Generation failed'}`);
+        for (const [index, concept] of data.concepts.entries()) {
+          const card = add(results, 'article', '', 'concept');
+          add(card, 'div', `Direction ${index + 1}`, 'tag');
+          add(card, 'h3', concept.campaign_direction);
+          add(card, 'p', concept.campaign_description);
+          block(card, 'Audience insight', concept.audience_insight);
+          block(card, 'Key message', concept.key_message);
+          const channels = add(card, 'div', '', 'block');
+          add(channels, 'strong', 'Channel plan');
+          const channelList = add(channels, 'ul', '');
+          for (const item of concept.channel_plan) add(channelList, 'li', `${item.channel}: ${item.role}`);
+          const assets = add(card, 'div', '', 'block');
+          add(assets, 'strong', 'Priority assets');
+          const assetList = add(assets, 'ul', '');
+          for (const item of concept.asset_plan) add(assetList, 'li', `${item.asset} (${item.channel})`);
+          const kpis = add(card, 'div', '', 'block');
+          add(kpis, 'strong', 'Proposed KPIs');
+          const kpiList = add(kpis, 'ul', '');
+          for (const item of concept.proposed_kpis) add(kpiList, 'li', `${item.metric}: ${item.target}`);
+          if (concept.budget_allocation.length) {
+            const budget = add(card, 'div', '', 'block');
+            add(budget, 'strong', 'Illustrative budget allocation');
+            const budgetList = add(budget, 'ul', '');
+            for (const item of concept.budget_allocation) add(budgetList, 'li', `${item.channel}: ${item.amount} ${brief.currency}`);
+          }
+        }
+        status.textContent = `Generated ${data.concepts.length} concepts in ${Math.round((Date.now() - started) / 1000)} seconds.`;
+      } catch (error) {
+        add(results, 'div', String(error), 'empty');
+        status.textContent = 'Generation did not complete. Please review the brief and try again.';
+      } finally {
+        clearInterval(timer);
+        button.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

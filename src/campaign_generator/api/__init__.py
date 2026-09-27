@@ -1,0 +1,1 @@
+"""Public campaign generation API."""
