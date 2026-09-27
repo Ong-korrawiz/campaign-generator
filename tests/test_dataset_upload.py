@@ -34,9 +34,10 @@ class DatasetUploadTests(TestCase):
             first = upload_final(ROOT / "dataset", "campaign-generator-509812")
             first_objects = dict(objects)
             second = upload_final(ROOT / "dataset", "campaign-generator-509812")
+        expected_hash = hashlib.sha256((ROOT / "dataset" / "manifest.json").read_bytes()).hexdigest()
         self.assertEqual(first, second)
         self.assertEqual(objects, first_objects)
-        self.assertIn("/2368fab94e9eb94deb91cdd79526a3dc8107240e5c97ee424ad35317aec8620d", first)
+        self.assertTrue(first.endswith(f"/versions/{expected_hash}"))
 
     def test_hash_mismatch_stops_upload_before_any_remote_write(self):
         with TemporaryDirectory() as temp:
