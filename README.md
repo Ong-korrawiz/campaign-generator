@@ -2,7 +2,11 @@
 
 A three-day implementation plan for a marketing campaign ideation service. The intended API accepts a structured campaign brief and returns three distinct campaign concepts in English. Two additional days are reserved for integration and delivery issues.
 
-**Project status:** Shared campaign schemas, the dataset_v2 teacher generator, and evaluation scaffold are implemented. Model training and the API remain planned work.
+**Project status:** Shared campaign schemas, the dataset_v2 teacher generator, evaluation scaffold, and GCP baseline infrastructure are implemented. Model training and the public API remain planned work.
+
+## Infrastructure
+
+Terraform provisions private GCS buckets, Artifact Registry, service accounts, Vertex AI training plumbing, and a private Cloud Run L4 baseline. See [infra/README.md](infra/README.md) for the runbook, [docs/INFRA_DELIVERY.md](docs/INFRA_DELIVERY.md) for the verified deployment result, and [docs/NEXT_STEPS.md](docs/NEXT_STEPS.md) for the public API and fine-tuning plan.
 
 ## Repository structure
 

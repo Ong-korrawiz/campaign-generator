@@ -7,3 +7,9 @@ data/
 artifacts/
 .env
 resource/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+backend.hcl
