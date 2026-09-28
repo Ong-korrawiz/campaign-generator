@@ -19,7 +19,7 @@ git diff
 
 | ส่วน | จุดเริ่มอ่าน | สิ่งที่ต้องยืนยัน |
 | --- | --- | --- |
-| Config | `src/campaign_generator/config.py` | ค่า API, dataset, model, LoRA และเกณฑ์ประเมินมีจุดอ้างอิงเดียว; อ่าน environment ตอนใช้งาน |
+| Config | [`config.py`](../src/campaign_generator/config.py), [คำอธิบาย config](config-reference.md) | ค่า API, dataset, model, LoRA และเกณฑ์ประเมินมีจุดอ้างอิงเดียว; อ่าน environment ตอนใช้งาน |
 | API | `src/campaign_generator/api/app.py`, `backend.py`, `service.py` | `POST /generate` ตรวจ brief, คืน 3 concepts ตาม schema, map timeout/error ชัดเจน และไม่เปิดเผยข้อมูลภายใน |
 | Contract และ prompt | `schemas.py`, `prompts/campaign.py` | field และข้อกำหนดตรงกัน; `campaign_description` มีรายละเอียดจาก brief และไม่มีการอ้างผลลัพธ์เกินหลักฐาน |
 | Dataset v3 | `dataset/`, `dataset_v3/pipeline.py`, `dataset_v3/gcs.py` | split 168/24/48, schema/hash/manifest ตรงกัน, provenance ครบ และการอัปโหลดซ้ำไม่เขียนทับข้อมูลที่ hash ต่างกัน |
