@@ -22,6 +22,12 @@ the commands and required variables.
 PROJECT_ID=campaign-generator-509812
 REGION=asia-southeast1
 
+# Bootstrap the state bucket first when setting up from a clean project.
+terraform -chdir=terraform/bootstrap init
+terraform -chdir=terraform/bootstrap apply -var="project_id=$PROJECT_ID" -var="region=$REGION"
+
+# Set terraform/platform/backend.hcl to the state bucket and prefix before init.
+terraform -chdir=terraform/platform init -backend-config=backend.hcl
 make apply-platform PROJECT_ID="$PROJECT_ID" REGION="$REGION"
 make build-inference PROJECT_ID="$PROJECT_ID" REGION="$REGION"
 make deploy-inference PROJECT_ID="$PROJECT_ID" REGION="$REGION" IMAGE_DIGEST="<digest printed by build-inference>"
@@ -85,9 +91,10 @@ both the HTTP endpoint and Google identity-token audience.
 
 ## Cleanup
 
-Destroy serving before platform. The state bucket is intentionally retained and must be emptied and removed separately after both remote states are no longer needed.
+For a future teardown, destroy API before serving, then platform, and bootstrap last. Empty the versioned state bucket only after all remote states have been saved, because it contains the state needed for Terraform cleanup.
 
 ```bash
+terraform -chdir=terraform/api destroy
 terraform -chdir=terraform/serving destroy
 terraform -chdir=terraform/platform destroy
 terraform -chdir=terraform/bootstrap destroy
