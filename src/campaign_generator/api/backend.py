@@ -10,6 +10,7 @@ import httpx
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.oauth2 import id_token
 
+from ..config import INFERENCE_MODEL_NAME, INFERENCE_TEMPERATURE, INFERENCE_TIMEOUT_SECONDS
 from ..schemas import CampaignDirectionV2
 
 
@@ -44,7 +45,7 @@ class VLLMBackend:
         self._url = inference_url.rstrip("/") + "/v1/chat/completions"
         self._audience = audience
         self._tokens = token_provider
-        self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(300.0))
+        self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(INFERENCE_TIMEOUT_SECONDS))
         self._owns_client = client is None
 
     async def close(self) -> None:
@@ -66,9 +67,9 @@ class VLLMBackend:
                 self._url,
                 headers={"Authorization": f"Bearer {token}"},
                 json={
-                    "model": "campaign-baseline",
+                    "model": INFERENCE_MODEL_NAME,
                     "messages": messages,
-                    "temperature": 0.2,
+                    "temperature": INFERENCE_TEMPERATURE,
                     "max_tokens": max_tokens,
                     "guided_json": schema,
                 },

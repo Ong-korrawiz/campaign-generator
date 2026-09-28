@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ..api.service import CampaignGenerator
+from ..config import BASE_MODEL_ID, BASE_MODEL_REVISION, EVAL_HOLDOUT_COUNT
 from ..io import read_jsonl
 from ..schemas import ApiCampaignBrief
 
@@ -87,7 +88,7 @@ def main() -> None:
     parser.add_argument("--test-file", required=True, help="Local JSONL path or gs:// object URI")
     parser.add_argument("--output", required=True, help="Local JSONL path or gs:// object URI")
     parser.add_argument("--adapter", help="Local adapter directory or gs:// directory prefix")
-    parser.add_argument("--limit", type=int, default=36)
+    parser.add_argument("--limit", type=int, default=EVAL_HOLDOUT_COUNT)
     parser.add_argument("--execute", action="store_true", help="Explicitly authorize local GPU inference")
     args = parser.parse_args()
     if not args.execute:
@@ -110,13 +111,11 @@ def main() -> None:
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        from ..training.train_lora import MODEL_ID, MODEL_REVISION
-
         if not torch.cuda.is_available():
             raise RuntimeError("Campaign prediction requires CUDA")
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, revision=MODEL_REVISION)
+        tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_ID, revision=BASE_MODEL_REVISION)
         model = AutoModelForCausalLM.from_pretrained(
-            MODEL_ID, revision=MODEL_REVISION, torch_dtype="auto", device_map="auto"
+            BASE_MODEL_ID, revision=BASE_MODEL_REVISION, torch_dtype="auto", device_map="auto"
         )
         if adapter_path:
             from peft import PeftModel
@@ -129,7 +128,7 @@ def main() -> None:
         tests = [
             row for _, row in read_jsonl(test_file) if str(row.get("id", "")).startswith("synthetic-v3-")
         ]
-        if len(tests) != 36:
+        if len(tests) != EVAL_HOLDOUT_COUNT:
             raise ValueError(f"Expected 36 fresh synthetic holdout rows, found {len(tests)}")
         if args.limit > len(tests):
             raise ValueError("Requested limit exceeds the 36-row primary holdout")

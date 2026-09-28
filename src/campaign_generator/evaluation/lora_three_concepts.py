@@ -12,10 +12,20 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from ..api.service import _json_object
+from ..config import (
+    API_CONCEPT_COUNT,
+    API_MAX_OUTPUT_TOKENS,
+    BASE_MODEL_ID,
+    BASE_MODEL_REVISION,
+    EVAL_LORA_MAX_ATTEMPTS,
+    EVAL_LORA_PER_SOURCE,
+    EVAL_LORA_TEMPERATURE,
+    EVAL_LORA_TOP_P,
+    TRAIN_SEED,
+)
 from ..io import read_jsonl
 from ..prompts.campaign import SYSTEM_PROMPT_V2, render_user_prompt
 from ..schemas import ApiCampaignBrief, CampaignDirectionV2
-from ..training.train_lora import MODEL_ID, MODEL_REVISION
 from .predict_concepts import localize_gcs_uri, upload_gcs_uri
 
 
@@ -24,13 +34,13 @@ def main() -> None:
     parser.add_argument("--validation-file", required=True)
     parser.add_argument("--adapter", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--per-source", type=int, default=3)
-    parser.add_argument("--max-attempts", type=int, default=6)
+    parser.add_argument("--per-source", type=int, default=EVAL_LORA_PER_SOURCE)
+    parser.add_argument("--max-attempts", type=int, default=EVAL_LORA_MAX_ATTEMPTS)
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
     if not args.execute or not args.output.startswith("gs://"):
         parser.error("Pass --execute and a gs:// output URI")
-    if args.per_source < 1 or args.max_attempts < 3:
+    if args.per_source < 1 or args.max_attempts < API_CONCEPT_COUNT:
         parser.error("Need at least one brief per source and three generation attempts")
 
     with tempfile.TemporaryDirectory(prefix="lora-three-") as tmp:
@@ -53,9 +63,9 @@ def main() -> None:
 
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA required")
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, revision=MODEL_REVISION)
+        tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_ID, revision=BASE_MODEL_REVISION)
         base = AutoModelForCausalLM.from_pretrained(
-            MODEL_ID, revision=MODEL_REVISION, torch_dtype="auto", device_map="auto"
+            BASE_MODEL_ID, revision=BASE_MODEL_REVISION, torch_dtype="auto", device_map="auto"
         )
         model = PeftModel.from_pretrained(base, str(adapter))
         model.eval()
@@ -75,15 +85,15 @@ def main() -> None:
             signatures = set()
             attempts = []
             for attempt in range(args.max_attempts):
-                torch.manual_seed(42 + brief_index * 100 + attempt)
+                torch.manual_seed(TRAIN_SEED + brief_index * 100 + attempt)
                 started = time.perf_counter()
                 with torch.no_grad():
                     output = model.generate(
                         prompt,
-                        max_new_tokens=1536,
+                        max_new_tokens=API_MAX_OUTPUT_TOKENS,
                         do_sample=True,
-                        temperature=0.7,
-                        top_p=0.9,
+                        temperature=EVAL_LORA_TEMPERATURE,
+                        top_p=EVAL_LORA_TOP_P,
                         pad_token_id=tokenizer.eos_token_id,
                     )
                 completion = output[0][prompt.shape[-1] :]
@@ -118,13 +128,13 @@ def main() -> None:
                         "latency_seconds": round(time.perf_counter() - started, 3),
                     }
                 )
-                if len(concepts) == 3:
+                if len(concepts) == API_CONCEPT_COUNT:
                     break
             results.append(
                 {
                     "source_id": row["id"],
                     "source_type": "synthetic" if row["id"].startswith("synthetic-v3-") else "legacy",
-                    "three_valid_distinct": len(concepts) == 3,
+                    "three_valid_distinct": len(concepts) == API_CONCEPT_COUNT,
                     "valid_concept_count": len(concepts),
                     "attempts": attempts,
                     "concepts": concepts,

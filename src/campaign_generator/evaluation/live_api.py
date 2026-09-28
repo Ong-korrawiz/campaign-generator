@@ -12,6 +12,15 @@ from pathlib import Path
 import httpx
 
 from ..api.service import _similar_name
+from ..config import (
+    API_DESCRIPTION_MAX_SENTENCES,
+    API_DESCRIPTION_MIN_SENTENCES,
+    EVAL_LIVE_BUDGET_CURRENCY,
+    EVAL_LIVE_BUDGET_MAX,
+    EVAL_LIVE_BUDGET_MIN,
+    EVAL_LIVE_LIMIT,
+    EVAL_LIVE_TIMEOUT_SECONDS,
+)
 from ..io import read_jsonl
 from ..schemas import CampaignGenerationResponse
 
@@ -44,7 +53,7 @@ def check_response(data: dict, brief: dict) -> list[str]:
             for part in re.split(r"[.!?]+(?:\s+|$)", concept.campaign_description.strip())
             if part.strip()
         ]
-        if not 2 <= len(sentences) <= 3:
+        if not API_DESCRIPTION_MIN_SENTENCES <= len(sentences) <= API_DESCRIPTION_MAX_SENTENCES:
             errors.append("description_sentence_count")
         channels = {item.channel for item in concept.channel_plan} | {
             item.channel for item in concept.asset_plan
@@ -65,7 +74,7 @@ def main() -> None:
     parser.add_argument("--test-file", type=Path, required=True)
     parser.add_argument("--url", required=True, help="Public API base URL")
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--limit", type=int, default=20)
+    parser.add_argument("--limit", type=int, default=EVAL_LIVE_LIMIT)
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
     if not args.execute:
@@ -75,11 +84,15 @@ def main() -> None:
     if args.limit < 1:
         parser.error("--limit must be positive")
     results = []
-    with httpx.Client(timeout=httpx.Timeout(900.0)) as client:
+    with httpx.Client(timeout=httpx.Timeout(EVAL_LIVE_TIMEOUT_SECONDS)) as client:
         for index, row in enumerate(select_rows(args.test_file, args.limit)):
             brief = dict(row["input"])
             if index % 2:
-                brief.update(budget_min=100000, budget_max=300000, currency="THB")
+                brief.update(
+                    budget_min=EVAL_LIVE_BUDGET_MIN,
+                    budget_max=EVAL_LIVE_BUDGET_MAX,
+                    currency=EVAL_LIVE_BUDGET_CURRENCY,
+                )
             started = time.perf_counter()
             try:
                 response = client.post(args.url.rstrip("/") + "/generate", json=brief)

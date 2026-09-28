@@ -7,16 +7,7 @@ import json
 import subprocess
 from pathlib import Path
 
-FINAL_FILES = ("manifest.json", "train.jsonl", "validation.jsonl", "test.jsonl", "quality_report.md")
-DRAFT_FILES = (
-    "manifest.json",
-    "drafts.jsonl",
-    "review_queue.jsonl",
-    "review_template.jsonl",
-    "synthetic_briefs.jsonl",
-    "brief_manifest.json",
-    "HUMAN_REVIEW.md",
-)
+from ..config import DATASET_BUCKET_SUFFIX, DATASET_DRAFT_FILES, DATASET_FINAL_FILES, DATASET_SPLIT_COUNTS
 
 
 def _gcloud(*args: str, allow_missing: bool = False) -> bytes | None:
@@ -45,7 +36,7 @@ def _put_immutable(path: Path, uri: str) -> None:
 def _bucket(project_id: str) -> str:
     if not project_id or not all(c.isalnum() or c == "-" for c in project_id):
         raise ValueError("A valid GCP project ID is required for automatic dataset upload")
-    return f"gs://{project_id}-dataset"
+    return f"gs://{project_id}{DATASET_BUCKET_SUFFIX}"
 
 
 def upload_draft(output_dir: Path, project_id: str) -> str:
@@ -54,7 +45,7 @@ def upload_draft(output_dir: Path, project_id: str) -> str:
     if hashlib.sha256((output_dir / "drafts.jsonl").read_bytes()).hexdigest() != draft_hash:
         raise ValueError("Draft hash differs from manifest")
     prefix = f"{_bucket(project_id)}/staging/{draft_hash}"
-    for name in DRAFT_FILES:
+    for name in DATASET_DRAFT_FILES:
         path = output_dir / name
         if path.exists():
             _put_immutable(path, f"{prefix}/{name}")
@@ -64,11 +55,7 @@ def upload_draft(output_dir: Path, project_id: str) -> str:
 def upload_final(output_dir: Path, project_id: str) -> str:
     manifest_path = output_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("schema_validation") != "passed" or manifest.get("split_counts") != {
-        "train": 168,
-        "validation": 24,
-        "test": 48,
-    }:
+    if manifest.get("schema_validation") != "passed" or manifest.get("split_counts") != DATASET_SPLIT_COUNTS:
         raise ValueError("Dataset has not passed schema and split validation")
     if not (manifest.get("human_semantic_review") is True and manifest.get("review_status") == "reviewed"):
         if not (
@@ -91,7 +78,7 @@ def upload_final(output_dir: Path, project_id: str) -> str:
         raise ValueError("Quality report hash differs from manifest")
     version = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
     prefix = f"{_bucket(project_id)}/versions/{version}"
-    for name in FINAL_FILES:
+    for name in DATASET_FINAL_FILES:
         _put_immutable(output_dir / name, f"{prefix}/{name}")
     if manifest.get("drafts_sha256"):
         staging = f"{_bucket(project_id)}/staging/{manifest['drafts_sha256']}"

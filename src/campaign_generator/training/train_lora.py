@@ -12,11 +12,40 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ..config import (
+    BASE_MODEL_ID,
+    BASE_MODEL_REVISION,
+    CODE_COMMIT_ENV,
+    DATASET_SPLIT_COUNTS,
+    TRAIN_CHECKPOINT_LIMIT,
+    TRAIN_CHECKPOINT_STEPS,
+    TRAIN_DEFAULT_MAX_STEPS,
+    TRAIN_DEFAULT_WORK_DIR,
+    TRAIN_EPOCHS,
+    TRAIN_EVAL_BATCH,
+    TRAIN_EVAL_METRIC,
+    TRAIN_GRADIENT_ACCUMULATION,
+    TRAIN_LABEL_IGNORE_INDEX,
+    TRAIN_LEARNING_RATE,
+    TRAIN_LOGGING_STEPS,
+    TRAIN_LORA_ALPHA,
+    TRAIN_LORA_BIAS,
+    TRAIN_LORA_DROPOUT,
+    TRAIN_LORA_R,
+    TRAIN_LORA_TARGET_MODULES,
+    TRAIN_LORA_TASK_TYPE,
+    TRAIN_MAX_SEQUENCE_LENGTH,
+    TRAIN_MICROBATCH,
+    TRAIN_SEED,
+    TRAIN_SEQUENCE_PERCENTILE,
+    TRAIN_SEQUENCE_ROUND_TO,
+    TRAIN_SMOKE_GRADIENT_ACCUMULATION,
+    TRAIN_SMOKE_MAX_STEPS,
+    TRAIN_SMOKE_MICROBATCH,
+    TRAIN_SMOKE_ROW_COUNT,
+    TRAIN_SMOKE_SEQUENCE_LIMIT,
+)
 from ..schemas import TrainingRecordV2
-
-MODEL_ID = "Qwen/Qwen2.5-1.5B-Instruct"
-MODEL_REVISION = "989aa7980e4cf806f80c7fef2b1adb7bc71aa306"
-MAX_SEQUENCE_LENGTH = 4096
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -39,8 +68,8 @@ def _tokenize(rows, tokenizer, max_length: int):
             truncated += 1
             full_ids = full_ids[:max_length]
         prompt_length = min(len(prompt_ids), len(full_ids))
-        labels = [-100] * prompt_length + full_ids[prompt_length:]
-        if not any(token != -100 for token in labels):
+        labels = [TRAIN_LABEL_IGNORE_INDEX] * prompt_length + full_ids[prompt_length:]
+        if not any(token != TRAIN_LABEL_IGNORE_INDEX for token in labels):
             raise ValueError(f"No assistant completion tokens remain for {row['id']}")
         encoded.append({"input_ids": full_ids, "attention_mask": [1] * len(full_ids), "labels": labels})
     return encoded, truncated
@@ -48,8 +77,9 @@ def _tokenize(rows, tokenizer, max_length: int):
 
 def _percentile_95(lengths: list[int]) -> int:
     ordered = sorted(lengths)
-    index = max(0, min(len(ordered) - 1, int(0.95 * len(ordered) + 0.999) - 1))
-    return min(MAX_SEQUENCE_LENGTH, ((ordered[index] + 255) // 256) * 256)
+    index = max(0, min(len(ordered) - 1, int(TRAIN_SEQUENCE_PERCENTILE * len(ordered) + 0.999) - 1))
+    rounded = (ordered[index] + TRAIN_SEQUENCE_ROUND_TO - 1) // TRAIN_SEQUENCE_ROUND_TO
+    return min(TRAIN_MAX_SEQUENCE_LENGTH, rounded * TRAIN_SEQUENCE_ROUND_TO)
 
 
 def _download_dataset(uri: str, destination: Path) -> None:
@@ -123,19 +153,24 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
     _download_dataset(args.dataset_uri, dataset_dir)
     train_rows = _read_jsonl(dataset_dir / "train.jsonl")
     validation_rows = _read_jsonl(dataset_dir / "validation.jsonl")
-    if not args.smoke_overfit and (len(train_rows) != 168 or len(validation_rows) != 24):
+    if not args.smoke_overfit and (
+        len(train_rows) != DATASET_SPLIT_COUNTS["train"]
+        or len(validation_rows) != DATASET_SPLIT_COUNTS["validation"]
+    ):
         raise ValueError("Expected approved dataset v3 splits of 168 train and 24 validation rows")
     if args.smoke_overfit:
-        train_rows = train_rows[:8]
+        train_rows = train_rows[:TRAIN_SMOKE_ROW_COUNT]
         validation_rows = train_rows
 
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, revision=MODEL_REVISION)
+    tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_ID, revision=BASE_MODEL_REVISION)
     tokenizer.padding_side = "right"
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     train_lengths = [len(tokenizer.apply_chat_template(row["messages"], tokenize=True)) for row in train_rows]
     max_length = (
-        min(1024, _percentile_95(train_lengths)) if args.smoke_overfit else _percentile_95(train_lengths)
+        min(TRAIN_SMOKE_SEQUENCE_LIMIT, _percentile_95(train_lengths))
+        if args.smoke_overfit
+        else _percentile_95(train_lengths)
     )
     tokenized_train, train_truncated = _tokenize(train_rows, tokenizer, max_length)
     tokenized_validation, validation_truncated = _tokenize(validation_rows, tokenizer, max_length)
@@ -151,47 +186,51 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             return self.values[index]
 
     model = AutoModelForCausalLM.from_pretrained(
-        MODEL_ID, revision=MODEL_REVISION, torch_dtype=torch.bfloat16, use_cache=False
+        BASE_MODEL_ID, revision=BASE_MODEL_REVISION, torch_dtype=torch.bfloat16, use_cache=False
     )
     model.gradient_checkpointing_enable()
     model = get_peft_model(
         model,
         LoraConfig(
-            r=16,
-            lora_alpha=32,
-            lora_dropout=0.05,
-            bias="none",
-            task_type="CAUSAL_LM",
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+            r=TRAIN_LORA_R,
+            lora_alpha=TRAIN_LORA_ALPHA,
+            lora_dropout=TRAIN_LORA_DROPOUT,
+            bias=TRAIN_LORA_BIAS,
+            task_type=TRAIN_LORA_TASK_TYPE,
+            target_modules=list(TRAIN_LORA_TARGET_MODULES),
         ),
     )
     model.print_trainable_parameters()
     output_dir = args.work_dir / "trainer-output"
     training_args = TrainingArguments(
         output_dir=str(output_dir),
-        learning_rate=2e-4,
-        num_train_epochs=3,
-        max_steps=20 if args.smoke_overfit else -1,
-        per_device_train_batch_size=1 if args.smoke_overfit else 4,
-        per_device_eval_batch_size=4,
-        gradient_accumulation_steps=1 if args.smoke_overfit else 8,
+        learning_rate=TRAIN_LEARNING_RATE,
+        num_train_epochs=TRAIN_EPOCHS,
+        max_steps=TRAIN_SMOKE_MAX_STEPS if args.smoke_overfit else TRAIN_DEFAULT_MAX_STEPS,
+        per_device_train_batch_size=TRAIN_SMOKE_MICROBATCH if args.smoke_overfit else TRAIN_MICROBATCH,
+        per_device_eval_batch_size=TRAIN_EVAL_BATCH,
+        gradient_accumulation_steps=(
+            TRAIN_SMOKE_GRADIENT_ACCUMULATION if args.smoke_overfit else TRAIN_GRADIENT_ACCUMULATION
+        ),
         bf16=True,
-        logging_steps=5,
+        logging_steps=TRAIN_LOGGING_STEPS,
         save_strategy="no" if args.smoke_overfit else "steps",
-        save_steps=25,
-        save_total_limit=2,
+        save_steps=TRAIN_CHECKPOINT_STEPS,
+        save_total_limit=TRAIN_CHECKPOINT_LIMIT,
         eval_strategy="steps",
-        eval_steps=25,
+        eval_steps=TRAIN_CHECKPOINT_STEPS,
         load_best_model_at_end=not args.smoke_overfit,
-        metric_for_best_model="eval_loss",
+        metric_for_best_model=TRAIN_EVAL_METRIC,
         greater_is_better=False,
-        seed=42,
-        data_seed=42,
+        seed=TRAIN_SEED,
+        data_seed=TRAIN_SEED,
         gradient_checkpointing=True,
         report_to=[],
         remove_unused_columns=False,
     )
-    collator = DataCollatorForSeq2Seq(tokenizer, padding=True, label_pad_token_id=-100, return_tensors="pt")
+    collator = DataCollatorForSeq2Seq(
+        tokenizer, padding=True, label_pad_token_id=TRAIN_LABEL_IGNORE_INDEX, return_tensors="pt"
+    )
 
     from transformers import TrainerCallback
 
@@ -239,13 +278,19 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
     }
     report = {
         "run_id": args.run_id,
-        "model_id": MODEL_ID,
-        "model_revision": MODEL_REVISION,
+        "model_id": BASE_MODEL_ID,
+        "model_revision": BASE_MODEL_REVISION,
         "dataset_uri": args.dataset_uri,
         "dataset_hashes": dataset_hashes,
-        "code_commit": os.getenv("CODE_COMMIT", "unknown"),
-        "lora": {"r": 16, "alpha": 32, "dropout": 0.05},
-        "training": {"lr": 2e-4, "epochs": 3, "microbatch": 4, "gradient_accumulation": 8, "seed": 42},
+        "code_commit": os.getenv(CODE_COMMIT_ENV, "unknown"),
+        "lora": {"r": TRAIN_LORA_R, "alpha": TRAIN_LORA_ALPHA, "dropout": TRAIN_LORA_DROPOUT},
+        "training": {
+            "lr": TRAIN_LEARNING_RATE,
+            "epochs": TRAIN_EPOCHS,
+            "microbatch": TRAIN_MICROBATCH,
+            "gradient_accumulation": TRAIN_GRADIENT_ACCUMULATION,
+            "seed": TRAIN_SEED,
+        },
         "sequence_limit": max_length,
         "train_truncated_rows": train_truncated,
         "validation_truncated_rows": validation_truncated,
@@ -278,11 +323,11 @@ def main() -> None:
     parser.add_argument("--dataset-uri", required=True)
     parser.add_argument("--output-uri", required=True)
     parser.add_argument("--run-id", required=True)
-    parser.add_argument("--work-dir", type=Path, default=Path("/tmp/campaign-training"))
+    parser.add_argument("--work-dir", type=Path, default=TRAIN_DEFAULT_WORK_DIR)
     parser.add_argument(
         "--smoke-overfit",
         action="store_true",
-        help="Run 20 GPU steps over eight rows and require loss to decrease",
+        help=f"Run {TRAIN_SMOKE_MAX_STEPS} GPU steps over {TRAIN_SMOKE_ROW_COUNT} rows and require loss to decrease",
     )
     args = parser.parse_args()
     print(json.dumps(train(args), indent=2, default=str))

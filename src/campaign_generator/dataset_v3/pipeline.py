@@ -22,6 +22,25 @@ from typing import Any
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from ..config import (
+    DATASET_CANDIDATE_COUNT,
+    DATASET_DEFAULT_CACHE,
+    DATASET_DEFAULT_OUTPUT_DIR,
+    DATASET_DEFAULT_SOURCE_BRIEFS,
+    DATASET_LEGACY_SPLIT_COUNTS,
+    DATASET_NAME,
+    DATASET_PROGRESS_INTERVAL,
+    DATASET_SEED,
+    DATASET_SPLIT_COUNTS,
+    DATASET_SYNTHETIC_BRIEF_COUNT,
+    DATASET_SYNTHETIC_SPLIT_COUNTS,
+    DATASET_TEACHER_WORKERS,
+    DEFAULT_GCP_PROJECT_ID,
+    GCP_PROJECT_ENV,
+    OPENAI_API_KEY_ENV,
+    PROMPT_VERSION,
+    TEACHER_MODEL_ID,
+)
 from ..prompts.campaign import SYSTEM_PROMPT_V2, make_messages_v2
 from ..schemas import (
     CampaignBrief,
@@ -30,11 +49,7 @@ from ..schemas import (
 )
 from .gcs import upload_draft, upload_final
 
-MODEL_ID = "gpt-6-luna"
-PROMPT_VERSION = "brief-to-campaign-description-v2"
 PROMPT_SHA256 = hashlib.sha256(f"{PROMPT_VERSION}\n{SYSTEM_PROMPT_V2}".encode()).hexdigest()
-DATASET_NAME = "baseline-v3-description-seed42"
-SEED = 42
 
 INDUSTRIES = (
     "food and beverage",
@@ -97,7 +112,7 @@ PROOF_POINTS = (
 def synthetic_briefs() -> list[dict[str, Any]]:
     """Create 120 fictional, grounded briefs with balanced industries and scenarios."""
     rows: list[dict[str, Any]] = []
-    for index in range(120):
+    for index in range(DATASET_SYNTHETIC_BRIEF_COUNT):
         industry = INDUSTRIES[index // 12]
         objective = OBJECTIVES[index % len(OBJECTIVES)]
         audience = AUDIENCES[(index * 5 + index // 10) % len(AUDIENCES)]
@@ -129,16 +144,18 @@ def synthetic_briefs() -> list[dict[str, Any]]:
 
 def assign_new_splits(rows: list[dict[str, Any]]) -> dict[str, str]:
     """Assign the 120 synthetic briefs deterministically to 72/12/36 splits."""
-    if len(rows) != 120:
+    if len(rows) != DATASET_SYNTHETIC_BRIEF_COUNT:
         raise ValueError(f"Expected 120 synthetic briefs, found {len(rows)}")
     shuffled = rows.copy()
-    random.Random(SEED).shuffle(shuffled)
+    random.Random(DATASET_SEED).shuffle(shuffled)
+    train_end = DATASET_SYNTHETIC_SPLIT_COUNTS["train"]
+    validation_end = train_end + DATASET_SYNTHETIC_SPLIT_COUNTS["validation"]
     return {
         row["id"]: split
         for split, group in (
-            ("train", shuffled[:72]),
-            ("validation", shuffled[72:84]),
-            ("test", shuffled[84:]),
+            ("train", shuffled[:train_end]),
+            ("validation", shuffled[train_end:validation_end]),
+            ("test", shuffled[validation_end:]),
         )
         for row in group
     }
@@ -184,7 +201,7 @@ class Teacher:
         self.db.commit()
 
     def generate(self, brief: dict[str, Any]) -> tuple[dict[str, Any], str, int, int, bool]:
-        key = canonical_hash({"brief": brief, "model": MODEL_ID, "prompt": PROMPT_SHA256})
+        key = canonical_hash({"brief": brief, "model": TEACHER_MODEL_ID, "prompt": PROMPT_SHA256})
         cached = self.db.execute("SELECT value FROM outputs WHERE cache_key=?", (key,)).fetchone()
         if cached:
             parsed = json.loads(cached[0])
@@ -196,7 +213,7 @@ class Teacher:
                 True,
             )
         response = self.client.responses.parse(
-            model=MODEL_ID,
+            model=TEACHER_MODEL_ID,
             store=False,
             input=[
                 {"role": "system", "content": SYSTEM_PROMPT_V2},
@@ -239,7 +256,7 @@ def _candidate(
         "source": source,
         "transformation": {
             "method": "openai_responses_structured_output",
-            "model": MODEL_ID,
+            "model": TEACHER_MODEL_ID,
             "prompt_version": PROMPT_VERSION,
             "prompt_sha256": PROMPT_SHA256,
             "response_id": response_id,
@@ -253,16 +270,18 @@ def _candidate(
 def generate(args: argparse.Namespace) -> None:
     if (args.output_dir / "manifest.json").exists() or (args.output_dir / "drafts.jsonl").exists():
         raise FileExistsError(f"Dataset run already exists: {args.output_dir}")
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    api_key = os.getenv(OPENAI_API_KEY_ENV, "").strip()
     if not api_key or api_key == "your_openai_api_key_here":
         raise ValueError("Set OPENAI_API_KEY before generating dataset v3 drafts")
     source_file = args.source_briefs
     old_rows: list[tuple[str, dict[str, Any], str, str]] = []
     for row in read_jsonl(source_file):
         old_rows.append((row["id"], row["brief"], row["split"], row["source_id"]))
-    if len(old_rows) != 120 or {
-        s: sum(row[2] == s for row in old_rows) for s in ("train", "validation", "test")
-    } != {"train": 96, "validation": 12, "test": 12}:
+    if (
+        len(old_rows) != sum(DATASET_LEGACY_SPLIT_COUNTS.values())
+        or {s: sum(row[2] == s for row in old_rows) for s in ("train", "validation", "test")}
+        != DATASET_LEGACY_SPLIT_COUNTS
+    ):
         raise ValueError("Expected the original reviewed seed 42 splits to contain 96/12/12 rows")
     new_rows = synthetic_briefs()
     new_split_by_id = assign_new_splits(new_rows)
@@ -294,11 +313,11 @@ def generate(args: argparse.Namespace) -> None:
         return _candidate(row_id, brief, split, source, thread_state.teacher)
 
     candidates: list[dict[str, Any] | None] = [None] * len(jobs)
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=DATASET_TEACHER_WORKERS) as executor:
         futures = {executor.submit(generate_one, job): index for index, job in enumerate(jobs)}
         for completed, future in enumerate(as_completed(futures), 1):
             candidates[futures[future]] = future.result()
-            if completed % 20 == 0 or completed == len(jobs):
+            if completed % DATASET_PROGRESS_INTERVAL == 0 or completed == len(jobs):
                 print(f"Teacher drafts: {completed}/{len(jobs)}", flush=True)
     candidates = [candidate for candidate in candidates if candidate is not None]
     cache_hits = sum(item["transformation"]["cache_hit"] for item in candidates)
@@ -326,10 +345,10 @@ def generate(args: argparse.Namespace) -> None:
         "dataset": DATASET_NAME,
         "schema_version": 2,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "seed": SEED,
+        "seed": DATASET_SEED,
         "source_dataset": "zarnite/zarn-creative-brief-to-asset-plan + campaign-generator-synthetic-briefs-v1",
         "source_revision": "4e2c4d87937dcda9604e2e99fb98715da51fab89",
-        "model": MODEL_ID,
+        "model": TEACHER_MODEL_ID,
         "prompt_version": PROMPT_VERSION,
         "prompt_sha256": PROMPT_SHA256,
         "candidate_count": len(candidates),
@@ -450,7 +469,7 @@ def finalize(args: argparse.Namespace) -> None:
         else:
             reviewed_candidates.append(item)
     _assert_no_split_leakage(reviewed_candidates)
-    expected = {"train": 168, "validation": 24, "test": 48}
+    expected = DATASET_SPLIT_COUNTS
     for split, count in expected.items():
         rows = [row for row in approved if row["source"]["split"] == split]
         if len(rows) != count:
@@ -475,9 +494,12 @@ def finalize(args: argparse.Namespace) -> None:
     )
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     report = (
-        f"# {DATASET_NAME}\n\n- Rows: 240 (train 168, validation 24, test 48)\n"
-        "- Human semantic review: 240/240 approved; see reviewed.jsonl for reviewer records.\n"
-        "- Primary promotion holdout: the 36 synthetic briefs in test; legacy test rows are secondary.\n"
+        f"# {DATASET_NAME}\n\n- Rows: {DATASET_CANDIDATE_COUNT} "
+        f"(train {expected['train']}, validation {expected['validation']}, test {expected['test']})\n"
+        f"- Human semantic review: {DATASET_CANDIDATE_COUNT}/{DATASET_CANDIDATE_COUNT} approved; "
+        "see reviewed.jsonl for reviewer records.\n"
+        f"- Primary promotion holdout: the {DATASET_SYNTHETIC_SPLIT_COUNTS['test']} synthetic "
+        "briefs in test; legacy test rows are secondary.\n"
         "- Teacher labels are proposals and do not contain KPI or budget labels.\n"
     )
     (args.output_dir / "quality_report.md").write_text(report, encoding="utf-8")
@@ -493,9 +515,9 @@ def finalize(args: argparse.Namespace) -> None:
 def prepare_schema_only_training(args: argparse.Namespace) -> None:
     """Build explicitly unreviewed training splits after strict schema validation."""
     candidates = read_jsonl(args.output_dir / "drafts.jsonl")
-    expected = {"train": 168, "validation": 24, "test": 48}
-    if len(candidates) != sum(expected.values()):
-        raise ValueError(f"Expected 240 candidates, found {len(candidates)}")
+    expected = DATASET_SPLIT_COUNTS
+    if len(candidates) != DATASET_CANDIDATE_COUNT:
+        raise ValueError(f"Expected {DATASET_CANDIDATE_COUNT} candidates, found {len(candidates)}")
     records: dict[str, list[dict[str, Any]]] = {split: [] for split in expected}
     ids: set[str] = set()
     for candidate in candidates:
@@ -543,8 +565,10 @@ def prepare_schema_only_training(args: argparse.Namespace) -> None:
     }
     quality_report = (
         f"# {DATASET_NAME} schema-only experiment\n\n"
-        "- Candidate rows: 240; all outputs validated against CampaignDirectionV2 and all training rows against TrainingRecordV2.\n"
-        "- Split counts: train 168, validation 24, test 48.\n"
+        f"- Candidate rows: {DATASET_CANDIDATE_COUNT}; all outputs validated against CampaignDirectionV2 "
+        "and all training rows against TrainingRecordV2.\n"
+        f"- Split counts: train {expected['train']}, validation {expected['validation']}, "
+        f"test {expected['test']}.\n"
         "- Schema validation: passed.\n"
         "- Human semantic review: pending; no semantic quality or factual grounding claim is made.\n"
         "- Use: experimental LoRA training only; not eligible for model promotion.\n"
@@ -585,24 +609,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     generate_parser = commands.add_parser("generate")
-    generate_parser.add_argument("--source-briefs", type=Path, default=Path("dataset/source_briefs.jsonl"))
-    generate_parser.add_argument("--output-dir", type=Path, default=Path("data/processed/dataset-v3"))
-    generate_parser.add_argument(
-        "--cache", type=Path, default=Path("data/cache/baseline-v3-description.sqlite3")
-    )
+    generate_parser.add_argument("--source-briefs", type=Path, default=DATASET_DEFAULT_SOURCE_BRIEFS)
+    generate_parser.add_argument("--output-dir", type=Path, default=DATASET_DEFAULT_OUTPUT_DIR)
+    generate_parser.add_argument("--cache", type=Path, default=DATASET_DEFAULT_CACHE)
     prepare_parser = commands.add_parser("prepare-briefs")
-    prepare_parser.add_argument("--output-dir", type=Path, default=Path("data/processed/dataset-v3"))
+    prepare_parser.add_argument("--output-dir", type=Path, default=DATASET_DEFAULT_OUTPUT_DIR)
     finalize_parser = commands.add_parser("finalize")
-    finalize_parser.add_argument("--output-dir", type=Path, default=Path("data/processed/dataset-v3"))
+    finalize_parser.add_argument("--output-dir", type=Path, default=DATASET_DEFAULT_OUTPUT_DIR)
     finalize_parser.add_argument("--reviews", type=Path, required=True)
     schema_train_parser = commands.add_parser("prepare-schema-only-training")
-    schema_train_parser.add_argument("--output-dir", type=Path, default=Path("data/processed/dataset-v3"))
+    schema_train_parser.add_argument("--output-dir", type=Path, default=DATASET_DEFAULT_OUTPUT_DIR)
     sync_parser = commands.add_parser("sync", help="Retry GCS upload after a network failure")
-    sync_parser.add_argument("--output-dir", type=Path, default=Path("data/processed/dataset-v3"))
+    sync_parser.add_argument("--output-dir", type=Path, default=DATASET_DEFAULT_OUTPUT_DIR)
     for command in (generate_parser, finalize_parser, schema_train_parser, sync_parser):
-        command.add_argument(
-            "--project-id", default=os.getenv("CAMPAIGN_GCP_PROJECT", "campaign-generator-509812")
-        )
+        command.add_argument("--project-id", default=os.getenv(GCP_PROJECT_ENV, DEFAULT_GCP_PROJECT_ID))
         command.add_argument("--no-upload", action="store_true", help="Keep generated files local")
     args = parser.parse_args()
     if args.command == "generate":
@@ -614,7 +634,7 @@ def main() -> None:
         split_map = assign_new_splits(rows)
         split_manifest = {
             "dataset": DATASET_NAME,
-            "seed": SEED,
+            "seed": DATASET_SEED,
             "counts": {
                 split: sum(value == split for value in split_map.values())
                 for split in ("train", "validation", "test")

@@ -13,6 +13,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from ..api.service import CampaignGenerator, _json_object
+from ..config import API_MAX_OUTPUT_TOKENS, BASE_MODEL_ID, BASE_MODEL_REVISION, EVAL_DIAGNOSTIC_PER_SOURCE
 from ..io import read_jsonl
 from ..prompts.campaign import SYSTEM_PROMPT_V2, render_user_prompt
 from ..schemas import ApiCampaignBrief, CampaignDirectionV2
@@ -74,7 +75,7 @@ def main() -> None:
     parser.add_argument("--validation-file", required=True)
     parser.add_argument("--adapter", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--per-source", type=int, default=6)
+    parser.add_argument("--per-source", type=int, default=EVAL_DIAGNOSTIC_PER_SOURCE)
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
     if not args.execute:
@@ -103,13 +104,11 @@ def main() -> None:
         from peft import PeftModel
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        from ..training.train_lora import MODEL_ID, MODEL_REVISION
-
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA required")
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, revision=MODEL_REVISION)
+        tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_ID, revision=BASE_MODEL_REVISION)
         base = AutoModelForCausalLM.from_pretrained(
-            MODEL_ID, revision=MODEL_REVISION, torch_dtype="auto", device_map="auto"
+            BASE_MODEL_ID, revision=BASE_MODEL_REVISION, torch_dtype="auto", device_map="auto"
         )
         model = PeftModel.from_pretrained(base, str(adapter))
         model.eval()
@@ -128,7 +127,7 @@ def main() -> None:
             for mode, messages in prompts.items():
                 before = backend.output_tokens
                 started = time.perf_counter()
-                raw = asyncio.run(backend.complete(messages=messages, max_tokens=1536))
+                raw = asyncio.run(backend.complete(messages=messages, max_tokens=API_MAX_OUTPUT_TOKENS))
                 results.append(
                     {
                         "source_id": row["id"],

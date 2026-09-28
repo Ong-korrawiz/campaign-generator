@@ -15,12 +15,22 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import ValidationError
 
+from ..config import (
+    API_MAX_BODY_BYTES,
+    API_MAX_BRIEF_TEXT_LENGTH,
+    API_MAX_CHANNELS,
+    API_MAX_CONSTRAINTS,
+    API_REJECTED_LOG_LENGTH,
+    API_TIMEOUT_SECONDS,
+    API_TITLE,
+    API_VERSION,
+    INFERENCE_AUDIENCE_ENV,
+    INFERENCE_URL_ENV,
+)
 from ..schemas import ApiCampaignBrief
 from .backend import GoogleIdentityTokenProvider, UpstreamError, VLLMBackend
 from .service import CampaignGenerator
 
-MAX_BODY_BYTES = 8 * 1024
-API_TIMEOUT_SECONDS = 900
 DEMO_HTML = Path(__file__).with_name("demo.html").read_text(encoding="utf-8")
 logger = logging.getLogger(__name__)
 
@@ -34,8 +44,8 @@ def create_app(generator: CampaignGenerator | None = None) -> FastAPI:
     async def lifespan(_: FastAPI):
         nonlocal backend, generator
         if generator is None:
-            inference_url = os.getenv("INFERENCE_URL", "").rstrip("/")
-            audience = os.getenv("INFERENCE_AUDIENCE", inference_url).rstrip("/")
+            inference_url = os.getenv(INFERENCE_URL_ENV, "").rstrip("/")
+            audience = os.getenv(INFERENCE_AUDIENCE_ENV, inference_url).rstrip("/")
             if inference_url and audience:
                 backend = VLLMBackend(inference_url, audience, GoogleIdentityTokenProvider())
                 generator = CampaignGenerator(backend)
@@ -44,7 +54,7 @@ def create_app(generator: CampaignGenerator | None = None) -> FastAPI:
         if backend is not None:
             await backend.close()
 
-    app = FastAPI(title="Campaign Generation API", version="1.0.0", lifespan=lifespan)
+    app = FastAPI(title=API_TITLE, version=API_VERSION, lifespan=lifespan)
     app.state.generator = injected_generator
 
     @app.get("/", response_class=HTMLResponse)
@@ -61,7 +71,7 @@ def create_app(generator: CampaignGenerator | None = None) -> FastAPI:
         size = 0
         async for chunk in request.stream():
             size += len(chunk)
-            if size > MAX_BODY_BYTES:
+            if size > API_MAX_BODY_BYTES:
                 raise HTTPException(status_code=413, detail="request_body_too_large")
             chunks.append(chunk)
         try:
@@ -73,12 +83,15 @@ def create_app(generator: CampaignGenerator | None = None) -> FastAPI:
         except (json.JSONDecodeError, ValueError, ValidationError) as exc:
             raise HTTPException(status_code=422, detail="invalid_campaign_brief") from exc
 
-        if len(payload.get("channels", [])) > 10 or len(payload.get("constraints", [])) > 20:
+        if (
+            len(payload.get("channels", [])) > API_MAX_CHANNELS
+            or len(payload.get("constraints", [])) > API_MAX_CONSTRAINTS
+        ):
             raise HTTPException(status_code=422, detail="too_many_channels_or_constraints")
 
         for key in ("industry", "target_audience", "objective", "brand", "brand_context", "proof_point"):
             value = payload.get(key, "")
-            if isinstance(value, str) and len(value) > 1000:
+            if isinstance(value, str) and len(value) > API_MAX_BRIEF_TEXT_LENGTH:
                 raise HTTPException(status_code=422, detail="brief_text_too_long")
 
         if app.state.generator is None:
@@ -93,7 +106,7 @@ def create_app(generator: CampaignGenerator | None = None) -> FastAPI:
             raise HTTPException(status_code=504, detail="inference_timeout") from exc
 
         except (UpstreamError, ValueError) as exc:
-            logger.warning("campaign_generation_rejected: %s", str(exc)[:500])
+            logger.warning("campaign_generation_rejected: %s", str(exc)[:API_REJECTED_LOG_LENGTH])
             raise HTTPException(status_code=502, detail="invalid_model_output") from exc
 
         except Exception as exc:

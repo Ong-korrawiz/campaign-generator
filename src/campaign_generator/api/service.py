@@ -10,6 +10,14 @@ from typing import Any, Protocol
 
 from pydantic import ValidationError
 
+from ..config import (
+    API_CONCEPT_ATTEMPTS,
+    API_DESCRIPTION_CHANNEL_LIMIT,
+    API_DESCRIPTION_MAX_SENTENCES,
+    API_DESCRIPTION_MIN_SENTENCES,
+    API_MAX_OUTPUT_TOKENS,
+    API_NAME_SIMILARITY_THRESHOLD,
+)
 from ..schemas import (
     ApiCampaignBrief,
     CampaignConcept,
@@ -31,7 +39,9 @@ ANGLES = (
 def _similar_name(name: str, previous: list[str]) -> bool:
     """Catch near-identical campaign names that pass an exact string check."""
     normalized = name.casefold().strip()
-    return any(SequenceMatcher(None, normalized, old).ratio() >= 0.82 for old in previous)
+    return any(
+        SequenceMatcher(None, normalized, old).ratio() >= API_NAME_SIMILARITY_THRESHOLD for old in previous
+    )
 
 
 def _complete_description(value: CampaignDirectionV2, brief: ApiCampaignBrief) -> CampaignDirectionV2:
@@ -41,8 +51,8 @@ def _complete_description(value: CampaignDirectionV2, brief: ApiCampaignBrief) -
     ]
     if len(parts) != 1:
         return value
-    channels = ", ".join(brief.channels[:3])
-    if len(brief.channels) > 3:
+    channels = ", ".join(brief.channels[:API_DESCRIPTION_CHANNEL_LIMIT])
+    if len(brief.channels) > API_DESCRIPTION_CHANNEL_LIMIT:
         channels += ", and other supplied channels"
     first = value.campaign_description.strip().rstrip(".!? ")
     return value.model_copy(
@@ -117,7 +127,7 @@ class CampaignGenerator:
             value: CampaignDirectionV2 | None = None
             last_error: Exception | None = None
             validation_issues: list[str] = []
-            for attempt in range(3):
+            for attempt in range(API_CONCEPT_ATTEMPTS):
                 prompt = {
                     **brief.model_dump(mode="json", exclude_none=True),
                     "creative_angle": angle,
@@ -164,7 +174,7 @@ class CampaignGenerator:
                     },
                 ]
                 try:
-                    raw = await self._backend.complete(messages=messages, max_tokens=1536)
+                    raw = await self._backend.complete(messages=messages, max_tokens=API_MAX_OUTPUT_TOKENS)
                     value = CampaignDirectionV2.model_validate(_json_object(raw))
                     value = _complete_description(value, brief)
                     name = value.campaign_direction.casefold().strip()
@@ -175,7 +185,7 @@ class CampaignGenerator:
                         for part in re.split(r"[.!?]+(?:\s+|$)", value.campaign_description.strip())
                         if part.strip()
                     ]
-                    if not 2 <= len(sentences) <= 3:
+                    if not API_DESCRIPTION_MIN_SENTENCES <= len(sentences) <= API_DESCRIPTION_MAX_SENTENCES:
                         raise ValueError("campaign_description_needs_2_to_3_sentences")
                     supplied_channels = set(brief.channels)
                     used_channels = {item.channel for item in value.channel_plan}

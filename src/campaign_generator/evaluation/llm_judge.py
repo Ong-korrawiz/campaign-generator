@@ -22,6 +22,18 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict
 
+from ..config import (
+    EVAL_BOOTSTRAP_SAMPLES,
+    EVAL_BOOTSTRAP_SEED,
+    EVAL_JUDGE_EXPECTED_IDEAS,
+    EVAL_JUDGE_LIMIT,
+    EVAL_JUDGE_MODE,
+    JUDGE_MODEL_ID,
+    OPENAI_API_KEY_ENV,
+    PROMOTION_MAX_RUBRIC_REGRESSION_POINTS,
+    PROMOTION_MIN_FORMAT_PASS_RATE,
+    PROMOTION_MIN_NET_WIN_POINTS,
+)
 from ..io import read_jsonl, sha256_file
 from ..prompts.judge import JUDGE_SYSTEM_PROMPT, JUDGE_USER_PROMPT_TEMPLATE
 
@@ -259,7 +271,7 @@ def metric_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def overall_promotion_metrics(
-    rows: list[dict[str, Any]], *, seed: int = 42, samples: int = 10_000
+    rows: list[dict[str, Any]], *, seed: int = EVAL_BOOTSTRAP_SEED, samples: int = EVAL_BOOTSTRAP_SAMPLES
 ) -> dict[str, Any]:
     """Compute net preference and percentile bootstrap CI over paired briefs."""
     outcomes = [row["judgments"]["overall"]["winner"] for row in rows]
@@ -305,7 +317,7 @@ def run_evaluation(
     if output_file.exists():
         raise FileExistsError(f"Output already exists: {output_file}")
     load_dotenv()
-    if not os.getenv("OPENAI_API_KEY", "").strip():
+    if not os.getenv(OPENAI_API_KEY_ENV, "").strip():
         raise RuntimeError("Set OPENAI_API_KEY in .env before running the judge.")
 
     tests = load_jsonl_map(test_file, id_fields=("id",))
@@ -449,12 +461,14 @@ def run_evaluation(
         report["metrics"]["format_pass_rate"] = format_rates
         report["metrics"]["rubric_net_percentage_points"] = rubric_net
         report["promotion_gate"] = {
-            "net_win_at_least_10_points": (promotion.get("net_win_percentage_points") or 0) >= 10,
+            "net_win_at_least_10_points": (promotion.get("net_win_percentage_points") or 0)
+            >= PROMOTION_MIN_NET_WIN_POINTS,
             "bootstrap_ci_excludes_zero": ci[0] is not None and ci[0] > 0,
-            "format_pass_at_least_98_percent": format_rates["tuned"] >= 0.98,
+            "format_pass_at_least_98_percent": format_rates["tuned"] >= PROMOTION_MIN_FORMAT_PASS_RATE,
             "format_pass_not_below_base": format_rates["tuned"] >= format_rates["base"],
             "critical_rubric_not_down_more_than_2_points": all(
-                rubric_net[key] >= -2 for key in ("goal_alignment", "groundedness", "execution_fit")
+                rubric_net[key] >= -PROMOTION_MAX_RUBRIC_REGRESSION_POINTS
+                for key in ("goal_alignment", "groundedness", "execution_fit")
             ),
             "human_review": "pending",
             "ready_to_promote": False,
@@ -471,10 +485,12 @@ def main() -> None:
     parser.add_argument("--base-predictions", type=Path, required=True)
     parser.add_argument("--tuned-predictions", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--model", default="gpt-6-astra")
-    parser.add_argument("--expected-ideas", type=int, default=10)
-    parser.add_argument("--mode", choices=("ideas", "concepts"), default="ideas")
-    parser.add_argument("--limit", type=int, default=30, help="Maximum examples; round-robin by industry.")
+    parser.add_argument("--model", default=JUDGE_MODEL_ID)
+    parser.add_argument("--expected-ideas", type=int, default=EVAL_JUDGE_EXPECTED_IDEAS)
+    parser.add_argument("--mode", choices=("ideas", "concepts"), default=EVAL_JUDGE_MODE)
+    parser.add_argument(
+        "--limit", type=int, default=EVAL_JUDGE_LIMIT, help="Maximum examples; round-robin by industry."
+    )
     parser.add_argument("--execute", action="store_true", help="Authorize OpenAI judge API calls.")
     args = parser.parse_args()
     if not args.execute:
