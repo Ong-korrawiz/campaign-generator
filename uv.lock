@@ -67,6 +67,7 @@ source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "google-auth" },
+    { name = "google-cloud-storage" },
     { name = "httpx" },
     { name = "openai" },
     { name = "pydantic" },
@@ -78,7 +79,6 @@ dependencies = [
 [package.optional-dependencies]
 training = [
     { name = "accelerate" },
-    { name = "google-cloud-storage" },
     { name = "peft" },
     { name = "safetensors" },
     { name = "sentencepiece" },
@@ -97,7 +97,7 @@ requires-dist = [
     { name = "accelerate", marker = "extra == 'training'", specifier = "==1.6.0" },
     { name = "fastapi", specifier = ">=0.115,<1" },
     { name = "google-auth", specifier = ">=2.40,<3" },
-    { name = "google-cloud-storage", marker = "extra == 'training'", specifier = "==3.1.0" },
+    { name = "google-cloud-storage", specifier = "==3.1.0" },
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "openai", specifier = ">=1.66,<3" },
     { name = "peft", marker = "extra == 'training'", specifier = "==0.15.2" },

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from decimal import Decimal
 from typing import Annotated, Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError, model_validator
 
@@ -108,6 +109,7 @@ class CampaignConcept(CampaignDirectionV2):
 class CampaignGenerationResponse(StrictModel):
     """Public API response containing exactly three distinct concepts."""
 
+    generation_id: UUID | None = None
     concepts: list[CampaignConcept] = Field(min_length=3, max_length=3)
 
     @model_validator(mode="after")

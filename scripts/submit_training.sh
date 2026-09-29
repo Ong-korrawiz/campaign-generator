@@ -26,6 +26,13 @@ if gcloud storage ls "${OUTPUT_URI}/" >/dev/null 2>&1; then
   echo "RUN_ID already has artifacts; choose a unique run ID to preserve prior results: ${RUN_ID}" >&2
   exit 1
 fi
+export GOOGLE_OAUTH_ACCESS_TOKEN
+GOOGLE_OAUTH_ACCESS_TOKEN="$(gcloud auth print-access-token)"
+PYTHON="${PYTHON:-${REPO_ROOT}/.venv/bin/python}"
+DATASET_URI="$(PYTHONPATH="${REPO_ROOT}/src" "${PYTHON}" -m campaign_generator.dataset_v3.feedback \
+  --base-uri "${DATASET_URI}" --feedback-bucket "${PROJECT_ID}-feedback" --project-id "${PROJECT_ID}")"
+[[ "${DATASET_URI}" == gs://* ]] || { echo "Feedback dataset snapshot failed" >&2; exit 1; }
+echo "Dataset for training: ${DATASET_URI}"
 CODE_COMMIT="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
 python3 - "${TEMPLATE}" "${CONFIG}" "${TRAINING_SA}" "${TRAINING_IMAGE}" "${DATASET_URI}" "${OUTPUT_URI}" "${RUN_ID}" "${CODE_COMMIT}" <<'PY'
 from pathlib import Path

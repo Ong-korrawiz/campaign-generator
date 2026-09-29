@@ -66,6 +66,27 @@ resource "google_storage_bucket" "dataset" {
   depends_on = [google_project_service.required]
 }
 
+resource "google_storage_bucket" "feedback" {
+  project                     = var.project_id
+  name                        = "${var.project_id}-feedback"
+  location                    = var.region
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+  force_destroy               = var.force_destroy_data_buckets
+
+  versioning {
+    enabled = true
+  }
+
+  depends_on = [google_project_service.required]
+}
+
+resource "google_storage_bucket_iam_member" "api_feedback_writer" {
+  bucket = google_storage_bucket.feedback.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.runtime["api"].email}"
+}
+
 resource "google_storage_bucket" "model_artifacts" {
   project                     = var.project_id
   name                        = "${var.project_id}-model-artifacts"

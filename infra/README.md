@@ -47,7 +47,7 @@ RUN_ID="lora-$(date -u +%Y%m%dT%H%M%SZ)"
 make train PROJECT_ID="$PROJECT_ID" REGION="$REGION" DATASET_URI="$DATASET_URI" RUN_ID="$RUN_ID"
 ```
 
-The `date` command above creates a new `RUN_ID` from the current UTC time. `make train` checks the uploaded dataset, builds the training image, resolves its digest, and submits a Vertex Spot L4 job. It returns after submission; training continues in Vertex.
+The `date` command above creates a new `RUN_ID` from the current UTC time. `make train` checks the uploaded dataset, builds the training image, resolves its digest, snapshots current thumb-up feedback into an immutable dataset version, and submits a Vertex Spot L4 job. It returns after submission; training continues in Vertex. The public API stores feedback in a separate private versioned bucket created by `apply-platform`.
 
 ## 4. Destroy
 

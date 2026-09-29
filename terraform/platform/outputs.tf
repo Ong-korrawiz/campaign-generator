@@ -6,6 +6,10 @@ output "dataset_bucket" {
   value = google_storage_bucket.dataset.name
 }
 
+output "feedback_bucket" {
+  value = google_storage_bucket.feedback.name
+}
+
 output "model_artifacts_bucket" {
   value = google_storage_bucket.model_artifacts.name
 }

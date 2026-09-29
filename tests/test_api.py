@@ -15,7 +15,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from campaign_generator.api.app import create_app
 from campaign_generator.api.backend import VLLMBackend
+from campaign_generator.api.feedback import MemoryFeedbackStore
 from campaign_generator.api.service import CampaignGenerator
+from campaign_generator.schemas import CampaignGenerationResponse
 
 
 class FakeBackend:
@@ -61,7 +63,8 @@ class FakeBackend:
 class ApiTests(unittest.TestCase):
     def setUp(self):
         self.backend = FakeBackend(duplicate_once=True)
-        self.client = TestClient(create_app(CampaignGenerator(self.backend)))
+        self.feedback_store = MemoryFeedbackStore()
+        self.client = TestClient(create_app(CampaignGenerator(self.backend), self.feedback_store))
 
     def tearDown(self):
         self.client.close()
@@ -87,6 +90,7 @@ class ApiTests(unittest.TestCase):
         response = self.client.post("/generate", json=self.brief())
         self.assertEqual(response.status_code, 200, response.text)
         concepts = response.json()["concepts"]
+        CampaignGenerationResponse.model_validate(response.json())
         self.assertEqual(len(concepts), 3)
         self.assertEqual(len({item["campaign_direction"].casefold() for item in concepts}), 3)
         self.assertEqual(len(self.backend.calls), 4)
@@ -128,6 +132,62 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(oversized.status_code, 413)
         invalid = self.client.post("/generate", json={"industry": ""})
         self.assertEqual(invalid.status_code, 422)
+
+    def test_partial_feedback_and_latest_rating(self):
+        generated = self.client.post("/generate", json=self.brief()).json()
+        generation_id = generated["generation_id"]
+        self.assertEqual(len(self.feedback_store.generations[generation_id]["concepts"]), 3)
+        first = self.client.post(
+            "/feedback",
+            json={"generation_id": generation_id, "ratings": [{"concept_index": 1, "rating": "up"}]},
+        )
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(first.json()["ratings"], {"1": "up"})
+        second = self.client.post(
+            "/feedback",
+            json={
+                "generation_id": generation_id,
+                "ratings": [{"concept_index": 1, "rating": "down"}, {"concept_index": 2, "rating": "up"}],
+            },
+        )
+        self.assertEqual(second.json()["ratings"], {"1": "down", "2": "up"})
+
+    def test_feedback_rejects_invalid_and_unknown_generations(self):
+        generated = self.client.post("/generate", json=self.brief()).json()
+        generation_id = generated["generation_id"]
+        invalid = self.client.post(
+            "/feedback",
+            json={
+                "generation_id": generation_id,
+                "ratings": [{"concept_index": 0, "rating": "up"}, {"concept_index": 0, "rating": "down"}],
+            },
+        )
+        self.assertEqual(invalid.status_code, 422)
+        unknown = self.client.post(
+            "/feedback",
+            json={
+                "generation_id": "00000000-0000-0000-0000-000000000000",
+                "ratings": [{"concept_index": 0, "rating": "up"}],
+            },
+        )
+        self.assertEqual(unknown.status_code, 404)
+
+    def test_feedback_storage_failure_is_reported(self):
+        class FailingStore(MemoryFeedbackStore):
+            def submit(self, generation_id, ratings):
+                raise RuntimeError("storage down")
+
+        client = TestClient(create_app(CampaignGenerator(FakeBackend()), FailingStore()))
+        try:
+            generation_id = client.post("/generate", json=self.brief()).json()["generation_id"]
+            response = client.post(
+                "/feedback",
+                json={"generation_id": generation_id, "ratings": [{"concept_index": 0, "rating": "up"}]},
+            )
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(response.json()["detail"], "feedback_storage_unavailable")
+        finally:
+            client.close()
 
     def test_vllm_decoding_requires_schema_and_supplied_channels(self):
         sent = []

@@ -36,6 +36,10 @@ resource "google_cloud_run_v2_service" "api" {
         name  = "INFERENCE_AUDIENCE"
         value = var.inference_url
       }
+      env {
+        name  = "FEEDBACK_BUCKET"
+        value = "${var.project_id}-feedback"
+      }
 
       resources {
         limits = {

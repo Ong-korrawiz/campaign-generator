@@ -98,6 +98,8 @@ New runs write to ignored `data/processed/dataset-v3`; the committed dataset is 
 
 The upload prints `Dataset uploaded: gs://<project-id>-dataset/versions/<hash>`. Use that whole URI as `DATASET_URI` for training. The `<hash>` is the SHA-256 of `data/processed/dataset-v3/manifest.json` (the first value from `sha256sum data/processed/dataset-v3/manifest.json`), calculated after the final splits are prepared. Choose `RUN_ID` yourself for each training run, such as `lora-20260929-01`; it names the output folder under `gs://<project-id>-model-artifacts/runs/` and must be new for every run.
 
+The demo accepts thumb-up/down ratings for selected concepts. Cloud Run stores the generated brief, concepts, and latest ratings in the private `<project-id>-feedback` bucket. `make train` and `make submit-training` automatically append schema-valid thumb-up concepts to a new immutable dataset version before submitting the job; down-rated concepts are excluded. The command prints the actual `Dataset for training` URI. Public feedback is not human-reviewed and the manifest labels it accordingly. Use the original base `DATASET_URI` for each run so a later down vote is excluded from the next snapshot. Local API runs without `FEEDBACK_BUCKET` keep feedback only in process memory.
+
 ## Fine-tuning and evaluation
 
 The training job uses completion-only LoRA loss on assistant messages. Build a digest-pinned training image and submit a Vertex CustomJob using the immutable dataset URI:
@@ -110,11 +112,13 @@ make submit-predictions PROJECT_ID=campaign-generator-509812 DATASET_URI=gs://ca
 make benchmark PROJECT_ID=campaign-generator-509812 DATASET_URI=gs://campaign-generator-509812-dataset/versions/<hash> RUN_ID=<unique-run-id>
 ```
 
+For each successful training run, the LoRA adapter and tokenizer are saved to `gs://<project-id>-model-artifacts/runs/<RUN_ID>/adapter/`. This is an adapter for the pinned base model, not a standalone full model. The same run folder contains `run_manifest.json` with training provenance, `_COMPLETE` after the final upload, and intermediate archives under `checkpoints/`. To inspect a run, use `gcloud storage ls gs://<project-id>-model-artifacts/runs/<RUN_ID>/`.
+
 Results for the completed v3 training run, including the training manifest, baseline/tuned outputs, benchmark, and diagnostics, are in [`experiments/runs/schema-only-seed42-20260927/`](experiments/runs/schema-only-seed42-20260927/). The adapter and checkpoint were archived locally under ignored `doc/cloud-archive/` before their GCS bucket was deleted; job IDs and original URIs are indexed in [`experiments/README.md`](experiments/README.md).
 
 ## API and deployment
 
-`GET /` serves the demo, `GET /health` reports API health, and `POST /generate` accepts a JSON brief. On success the response contains exactly three `concepts`. Each concept has `campaign_direction`, `campaign_description`, `audience_insight`, `key_message`, `channel_plan`, `asset_plan`, `proposed_kpis`, and optional `budget_allocation`. KPI and budget numbers are planning proposals, not measured forecasts.
+`GET /` serves the demo, `GET /health` reports API health, and `POST /generate` accepts a JSON brief. On success the response contains a `generation_id` and exactly three `concepts`. Each concept has `campaign_direction`, `campaign_description`, `audience_insight`, `key_message`, `channel_plan`, `asset_plan`, `proposed_kpis`, and optional `budget_allocation`. KPI and budget numbers are planning proposals, not measured forecasts. `POST /feedback` accepts `{"generation_id":"<id>","ratings":[{"concept_index":0,"rating":"up"}]}`. It saves only selected indices (0–2); submitting another rating for the same index replaces the previous one.
 
 ```bash
 curl --max-time 900 -sS http://localhost:8080/generate \

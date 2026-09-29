@@ -33,6 +33,10 @@
     .block strong { display: block; margin-bottom: .2rem; }
     ul { padding-left: 1.2rem; margin: .3rem 0; }
     .empty { border: 1px dashed #a8c2b9; border-radius: 14px; padding: 2rem; color: #526b69; }
+    .votes { display: flex; gap: .6rem; margin-top: 1rem; }
+    .votes button { width: auto; margin: 0; background: #e9f1ee; }
+    .votes button[aria-pressed="true"] { background: #c7f36b; }
+    #feedback-submit { max-width: 240px; }
     @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
   </style>
 </head>
@@ -67,6 +71,9 @@
     <section aria-labelledby="results-title">
       <h2 id="results-title">Concepts</h2>
       <div id="results" class="results"><div class="empty">Complete the brief and generate three campaign directions.</div></div>
+      <button type="button" id="feedback-submit" hidden>Submit feedback</button>
+      <p class="hint">Submitting a thumb-up shares the brief and concept for future model training.</p>
+      <p id="feedback-status" role="status" aria-live="polite"></p>
     </section>
   </main>
   <script>
@@ -74,6 +81,10 @@
     const results = document.querySelector('#results');
     const status = document.querySelector('#status');
     const button = document.querySelector('#submit');
+    const feedbackButton = document.querySelector('#feedback-submit');
+    const feedbackStatus = document.querySelector('#feedback-status');
+    const selectedRatings = new Map();
+    let generationId = null;
     const field = id => document.getElementById(id).value.trim();
     const add = (parent, tag, value, className) => {
       const element = document.createElement(tag);
@@ -101,6 +112,10 @@
         brief.currency = field('currency');
       }
       button.disabled = true;
+      feedbackButton.hidden = true;
+      feedbackStatus.textContent = '';
+      selectedRatings.clear();
+      generationId = null;
       results.replaceChildren();
       status.textContent = 'Generating three concepts…';
       const started = Date.now();
@@ -111,6 +126,7 @@
         const response = await fetch('/generate', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(brief) });
         const data = await response.json();
         if (!response.ok) throw new Error(`HTTP ${response.status}: ${data.detail || 'Generation failed'}`);
+        generationId = data.generation_id;
         for (const [index, concept] of data.concepts.entries()) {
           const card = add(results, 'article', '', 'concept');
           add(card, 'div', `Direction ${index + 1}`, 'tag');
@@ -136,7 +152,19 @@
             const budgetList = add(budget, 'ul', '');
             for (const item of concept.budget_allocation) add(budgetList, 'li', `${item.channel}: ${item.amount} ${brief.currency}`);
           }
+          const votes = add(card, 'div', '', 'votes');
+          for (const rating of ['up', 'down']) {
+            const vote = add(votes, 'button', rating === 'up' ? '👍 Thumb up' : '👎 Thumb down');
+            vote.type = 'button';
+            vote.setAttribute('aria-pressed', 'false');
+            vote.addEventListener('click', () => {
+              selectedRatings.set(index, rating);
+              for (const sibling of votes.children) sibling.setAttribute('aria-pressed', String(sibling === vote));
+              feedbackStatus.textContent = 'Feedback selected. Submit to save it.';
+            });
+          }
         }
+        feedbackButton.hidden = false;
         status.textContent = `Generated ${data.concepts.length} concepts in ${Math.round((Date.now() - started) / 1000)} seconds.`;
       } catch (error) {
         add(results, 'div', String(error), 'empty');
@@ -144,6 +172,28 @@
       } finally {
         clearInterval(timer);
         button.disabled = false;
+      }
+    });
+    feedbackButton.addEventListener('click', async () => {
+      if (!generationId || !selectedRatings.size) {
+        feedbackStatus.textContent = 'Select at least one thumb up or thumb down.';
+        return;
+      }
+      feedbackButton.disabled = true;
+      feedbackStatus.textContent = 'Saving feedback…';
+      try {
+        const ratings = [...selectedRatings].map(([concept_index, rating]) => ({concept_index, rating}));
+        const response = await fetch('/feedback', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({generation_id: generationId, ratings})
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
+        feedbackStatus.textContent = 'Feedback saved. Thumb-up concepts will be included in future training.';
+      } catch (error) {
+        feedbackStatus.textContent = `Could not save feedback: ${error}`;
+      } finally {
+        feedbackButton.disabled = false;
       }
     });
   </script>

@@ -16,7 +16,6 @@ from ..config import (
     BASE_MODEL_ID,
     BASE_MODEL_REVISION,
     CODE_COMMIT_ENV,
-    DATASET_SPLIT_COUNTS,
     TRAIN_CHECKPOINT_LIMIT,
     TRAIN_CHECKPOINT_STEPS,
     TRAIN_DEFAULT_MAX_STEPS,
@@ -88,15 +87,34 @@ def _download_dataset(uri: str, destination: Path) -> None:
 
         bucket_name, prefix = uri[5:].split("/", 1)
         client = storage.Client()
-        for split in ("train", "validation"):
-            blob = client.bucket(bucket_name).blob(f"{prefix.rstrip('/')}/{split}.jsonl")
+        for name in ("manifest.json", "train.jsonl", "validation.jsonl"):
+            blob = client.bucket(bucket_name).blob(f"{prefix.rstrip('/')}/{name}")
             if not blob.exists():
                 raise FileNotFoundError(f"Missing gs://{bucket_name}/{blob.name}")
-            blob.download_to_filename(destination / f"{split}.jsonl")
+            blob.download_to_filename(destination / name)
     else:
         source = Path(uri)
-        for split in ("train", "validation"):
-            shutil.copyfile(source / f"{split}.jsonl", destination / f"{split}.jsonl")
+        for name in ("manifest.json", "train.jsonl", "validation.jsonl"):
+            shutil.copyfile(source / name, destination / name)
+
+
+def _load_training_splits(dataset_dir: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    manifest = json.loads((dataset_dir / "manifest.json").read_text(encoding="utf-8"))
+    train_rows = _read_jsonl(dataset_dir / "train.jsonl")
+    validation_rows = _read_jsonl(dataset_dir / "validation.jsonl")
+    for split, rows in (("train", train_rows), ("validation", validation_rows)):
+        content = (dataset_dir / f"{split}.jsonl").read_bytes()
+        expected_hash = (manifest.get("training_files_sha256") or manifest.get("files_sha256") or {}).get(
+            split
+        )
+        if (
+            len(rows) != manifest["split_counts"][split]
+            or hashlib.sha256(content).hexdigest() != expected_hash
+        ):
+            raise ValueError(f"Dataset {split} split differs from manifest")
+    if not train_rows or not validation_rows:
+        raise ValueError("Training and validation splits must not be empty")
+    return train_rows, validation_rows
 
 
 def _latest_complete_checkpoint(output_uri: str, local_dir: Path) -> str | None:
@@ -151,13 +169,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
     dataset_dir = args.work_dir / "dataset"
     dataset_dir.mkdir(exist_ok=True)
     _download_dataset(args.dataset_uri, dataset_dir)
-    train_rows = _read_jsonl(dataset_dir / "train.jsonl")
-    validation_rows = _read_jsonl(dataset_dir / "validation.jsonl")
-    if not args.smoke_overfit and (
-        len(train_rows) != DATASET_SPLIT_COUNTS["train"]
-        or len(validation_rows) != DATASET_SPLIT_COUNTS["validation"]
-    ):
-        raise ValueError("Expected approved dataset v3 splits of 168 train and 24 validation rows")
+    train_rows, validation_rows = _load_training_splits(dataset_dir)
     if args.smoke_overfit:
         train_rows = train_rows[:TRAIN_SMOKE_ROW_COUNT]
         validation_rows = train_rows
