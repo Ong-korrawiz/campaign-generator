@@ -1,6 +1,6 @@
 # Infrastructure
 
-Run these commands from the repository root. You need Terraform 1.12+, the Google Cloud CLI, a project with billing enabled, and Cloud Run L4 quota.
+Run these commands from the repository root. Before running `make deploy-demo`, you need an existing GCP project with billing enabled and Cloud Run L4 quota in the selected region. You also need Terraform 1.12+ and the Google Cloud CLI.
 
 ## 1. ADC
 
@@ -71,3 +71,13 @@ make destroy-all PROJECT_ID="$PROJECT_ID" REGION="$REGION"
 ```
 
 `destroy-all` runs the four destroy steps in dependency order and permanently deletes Terraform-managed resources, dataset/model bucket contents, and state history. The GCP project and enabled APIs remain. Stop any active Vertex CustomJobs separately. Each operation reports `OK` or `FAILED` and stops on failure.
+
+Before running the destroy command, switch back to your personal Google account and refresh your local credentials:
+```
+PROJECT_ID=campaign-generator-509812
+REGION=asia-southeast1
+unset GOOGLE_APPLICATION_CREDENTIALS
+gcloud auth login
+gcloud auth application-default login
+gcloud auth application-default print-access-token >/dev/null
+```
