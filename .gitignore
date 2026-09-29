@@ -6,6 +6,7 @@ __pycache__/
 data/
 artifacts/
 doc/
+experiments/
 submission/*.zip
 .env
 resource/
@@ -15,3 +16,4 @@ resource/
 *.tfvars
 !*.tfvars.example
 backend.hcl
+*.codeworkspace

@@ -75,8 +75,11 @@ destroy_platform() {
   if grep -Fxq 'google_storage_bucket.model_artifacts' <<<"${RESOURCES}"; then
     targets+=(-target=google_storage_bucket.model_artifacts)
   fi
+  if grep -Fxq 'google_storage_bucket.feedback' <<<"${RESOURCES}"; then
+    targets+=(-target=google_storage_bucket.feedback)
+  fi
   if ((${#targets[@]})); then
-    run_step "allow dataset and artifact bucket cleanup" terraform \
+    run_step "allow data bucket cleanup" terraform \
       -chdir="${REPO_ROOT}/terraform/platform" apply "${targets[@]}" \
       -var="project_id=${PROJECT_ID}" -var="region=${REGION}" \
       -var="force_destroy_data_buckets=true" -auto-approve

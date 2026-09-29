@@ -1,3 +1,0 @@
-transformers>=4.45,<5
-accelerate>=1,<2
-# Install a CUDA-compatible PyTorch build in Colab before running the baseline.

@@ -1,7 +1,0 @@
-# Dataset v3 experiment evidence
-
-One LoRA training run has been completed on dataset v3: `schema-only-seed42-20260927`, Vertex CustomJob `4823415399175421952`. Its dataset URI is recorded in the run manifest as provenance; the GCS resources have since been decommissioned.
-
-The run directory contains the training manifest, baseline and tuned predictions, pairwise benchmark report, prompt diagnostic outputs, and three-concept smoke outputs. The full adapter, checkpoint, and original result files were copied to the ignored local folder `doc/cloud-archive/model-artifacts/runs/schema-only-seed42-20260927/` before GCS teardown. Related Vertex job IDs: base predictions `7616667514935705600`, tuned predictions `5049721280450789376`, prompt diagnostic `1795870549675606016`, and three-concept diagnostic `7611038015401492480`. The earlier training connectivity smoke job `366435064822628352` did not train a model. All Vertex custom-job resources were deleted through the Vertex AI REST API during teardown; the IDs remain here as historical run provenance.
-
-On the 36-brief holdout, the original baseline yielded three schema-valid concepts for 7/36 briefs and the tuned model for 0/36; the tuned adapter was not promoted. The later public API structural check passed 20/20 separate briefs, while human spot checks found generic ideas and unsupported claims. See `api-acceptance.md` and `public-api-20.json` for that test. Subsequent runs should use a unique `RUN_ID` so every result remains separate.

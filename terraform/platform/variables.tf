@@ -10,7 +10,7 @@ variable "region" {
 }
 
 variable "force_destroy_data_buckets" {
-  description = "Delete all dataset and model artifact objects when destroying their buckets."
+  description = "Delete all dataset, feedback, and model artifact objects when destroying their buckets."
   type        = bool
   default     = false
 }

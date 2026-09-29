@@ -37,7 +37,7 @@ Open that URL in a browser. Visitors do not need GCP credentials.
 
 ## 3. Training
 
-First prepare and upload a dataset using the [dataset steps](../README.md#dataset). The upload prints `Dataset uploaded: gs://<project-id>-dataset/versions/<64-character-hash>`. Copy the **entire URI** after `Dataset uploaded:` into `DATASET_URI`. The last part is the manifest hash: the SHA-256 hash of the generated `data/processed/dataset-v3/manifest.json` file. If you missed the printed URI, run `sha256sum data/processed/dataset-v3/manifest.json` and use its first value after `versions/`.
+First upload the committed dataset with `make upload-dataset PROJECT_ID="$PROJECT_ID" DATASET_DIR=dataset`, or prepare a new one using the [dataset steps](../README.md#dataset). The upload prints `Dataset uploaded: gs://<project-id>-dataset/versions/<64-character-hash>`. Copy the **entire URI** after `Dataset uploaded:` into `DATASET_URI`. The last part is the SHA-256 hash of the chosen dataset's `manifest.json`; run `sha256sum dataset/manifest.json` for the committed version or `sha256sum data/processed/dataset-v3/manifest.json` for a new run.
 
 Choose `RUN_ID` yourself for this training run; it names the output folder under `gs://$PROJECT_ID-model-artifacts/runs/`. Use a new value for every run, for example `lora-20260929-01`, so earlier results are not overwritten.
 
@@ -62,7 +62,7 @@ make destroy-platform PROJECT_ID="$PROJECT_ID" REGION="$REGION"
 make destroy-state PROJECT_ID="$PROJECT_ID" REGION="$REGION"
 ```
 
-`destroy-api` removes the public API; `destroy-inference` removes the private GPU service. `destroy-platform` removes shared resources and all dataset/model artifacts. `destroy-state` removes the versioned Terraform state bucket.
+`destroy-api` removes the public API; `destroy-inference` removes the private GPU service. `destroy-platform` removes shared resources and all dataset, feedback, and model artifacts. `destroy-state` removes the versioned Terraform state bucket.
 
 To run the same teardown in one command:
 
@@ -70,7 +70,7 @@ To run the same teardown in one command:
 make destroy-all PROJECT_ID="$PROJECT_ID" REGION="$REGION"
 ```
 
-`destroy-all` runs the four destroy steps in dependency order and permanently deletes Terraform-managed resources, dataset/model bucket contents, and state history. The GCP project and enabled APIs remain. Stop any active Vertex CustomJobs separately. Each operation reports `OK` or `FAILED` and stops on failure.
+`destroy-all` runs the four destroy steps in dependency order and permanently deletes Terraform-managed resources, dataset/feedback/model bucket contents, and state history. The GCP project and enabled APIs remain. Stop any active Vertex CustomJobs separately. Each operation reports `OK` or `FAILED` and stops on failure.
 
 Before running the destroy command, switch back to your personal Google account and refresh your local credentials:
 ```

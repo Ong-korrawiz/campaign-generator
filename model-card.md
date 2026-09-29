@@ -2,10 +2,10 @@
 
 ## Deployment
 
-- Public API: decommissioned after the project resource cleanup on 2026-09-28.
+- Public API: redeployed on 2026-09-30 at https://campaign-api-ivrph5gd4a-as.a.run.app.
 - Inference model: Qwen2.5-1.5B-Instruct, revision `989aa7980e4cf806f80c7fef2b1adb7bc71aa306`
 - Serving: private Cloud Run L4 behind a public API that authenticates to inference with a Google ID token.
-- Fine-tuned adapter: exploratory LoRA artifact from Vertex CustomJob `4823415399175421952`; not promoted. Benchmark report: [Markdown](../experiments/runs/schema-only-seed42-20260927/report.md).
+- Fine-tuned adapter: exploratory LoRA artifact from Vertex CustomJob `4823415399175421952`; not promoted after failing the output-format gate.
 
 ## Intended use
 

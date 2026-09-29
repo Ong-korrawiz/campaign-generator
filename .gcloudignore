@@ -6,7 +6,10 @@
 data/
 artifacts/
 doc/
-submission/*.zip
+experiments/
+experiments.codeworkspace/
+resource/
+submission/
 .terraform/
 .ruff_cache/
 *.egg-info/
