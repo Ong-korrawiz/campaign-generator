@@ -57,7 +57,7 @@ resource "google_storage_bucket" "dataset" {
   location                    = var.region
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
-  force_destroy               = false
+  force_destroy               = var.force_destroy_data_buckets
 
   versioning {
     enabled = true
@@ -72,7 +72,7 @@ resource "google_storage_bucket" "model_artifacts" {
   location                    = var.region
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
-  force_destroy               = false
+  force_destroy               = var.force_destroy_data_buckets
 
   versioning {
     enabled = true

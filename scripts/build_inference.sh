@@ -3,12 +3,11 @@ set -euo pipefail
 
 PROJECT_ID="${1:?Usage: $0 PROJECT_ID [REGION]}"
 REGION="${2:-asia-southeast1}"
-MODEL_REVISION="989aa7980e4cf806f80c7fef2b1adb7bc71aa306"
-IMAGE_TAG="baseline:${MODEL_REVISION:0:12}"
-IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/campaign-generator/${IMAGE_TAG}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/inference_image.sh"
+IMAGE="$(inference_image_tag "${PROJECT_ID}" "${REGION}")"
 BUILD_SA="projects/${PROJECT_ID}/serviceAccounts/campaign-build@${PROJECT_ID}.iam.gserviceaccount.com"
 BUILD_SOURCE_BUCKET="gs://${PROJECT_ID}-build-source/source"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 gcloud builds submit "${REPO_ROOT}/infra/inference" \

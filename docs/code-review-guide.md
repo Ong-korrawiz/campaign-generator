@@ -42,10 +42,10 @@ Schema pass อย่างเดียวไม่ยืนยันว่า�
 ## 4. รัน checks
 
 ```bash
-.venv/bin/python -m pytest -q
-python -m pip install ruff
-ruff check src tests
-.venv/bin/python -m campaign_generator.dataset_v3.pipeline --help
+uv sync --locked --group dev
+uv run pytest -q
+uv run ruff check src tests
+uv run python -m campaign_generator.dataset_v3.pipeline --help
 ```
 
 รันเฉพาะคำสั่งที่ตรงกับไฟล์ซึ่งเปลี่ยน และระบุใน review ว่า check ใดผ่านหรือยังไม่ได้รัน การตรวจ infrastructure ใช้ `terraform fmt -check -recursive terraform` และ `terraform validate` ในแต่ละ state หลัง init ด้วย backend ที่ถูกต้อง โดยไม่ apply ระหว่าง code review

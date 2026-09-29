@@ -6,27 +6,84 @@ Marketing campaign ideation prototype for the Jenosize AI & Data Engineer assign
 
 At deployment, the API used a private Qwen2.5-1.5B-Instruct baseline through vLLM. The LoRA adapter is experimental and was not deployed: on the 36-brief holdout, the original baseline produced three schema-valid concepts for 7/36 briefs and the tuned model for 0/36. The revised baseline API passed structural checks on 20/20 additional briefs, but manual review still found generic ideas and unsupported claims. These are separate evaluations; see [experiment results](experiments/README.md).
 
-## Setup
+## Quickstart: local demo
 
-For a guided review of the API, dataset, training, evaluation, and deployment code, see [Code Review Guide](docs/code-review-guide.md).
+Requires Python 3.10+, [uv](https://docs.astral.sh/uv/), the Google Cloud CLI, and access to the project's private inference service. Generating teacher drafts also requires an OpenAI API key; set `OPENAI_API_KEY` in `.env`. The hosted API and inference services have been decommissioned, so campaign generation requires redeploying the infrastructure first; follow the [IaC setup guide](infra/README.md).
 
-Requires Python 3.10+, `gcloud` for dataset upload and Vertex jobs, and an authenticated GCP account with dataset bucket access.
+For the simplest demo after deployment, open the public API URL printed by `make deploy-demo`. If you missed it, run `gcloud run services describe campaign-api --project="$PROJECT_ID" --region="$REGION" --format='value(status.url)'`. The public page does not require local ADC setup. The steps below are for running the API locally.
 
-```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -e . pytest
-.venv/bin/python -m pytest -q
-```
+### 1. Clone the repo and install dependencies
 
-Set `OPENAI_API_KEY` in `.env` to generate teacher drafts. The key is never committed. For local API use, set `INFERENCE_URL` and `INFERENCE_AUDIENCE` to an authenticated private inference endpoint, then run:
+Create your local environment file:
 
 ```bash
-.venv/bin/uvicorn campaign_generator.api.app:app --port 8080
+git clone https://github.com/Ong-korrawiz/campaign-generator.git
+cd campaign-generator
+uv sync --locked --group dev
+cp .env.example .env
 ```
+
+The `dev` dependency group includes `pre-commit`, which the Git hook runs from `.venv`. On a fresh clone, install the hook with `uv run pre-commit install`.
+
+### 2. Get the private inference URL
+
+After deploying the infrastructure, set your project and region and get the URL from Cloud Run:
+
+```bash
+PROJECT_ID="your-project-id"
+REGION="asia-southeast1"
+gcloud run services describe campaign-baseline-inference --project="$PROJECT_ID" --region="$REGION" --format='value(status.url)'
+```
+
+Put that URL in `.env` as `INFERENCE_URL` and `INFERENCE_AUDIENCE` (spelled **INFERENCE**, not `INVERENCE`; the audience defaults to the URL if omitted).
+
+### 3. Allow local authentication
+
+Local authentication needs permission to impersonate the `campaign-api` service account. Have a project administrator grant your Google account the Service Account Token Creator role **on that service account**:
+
+```bash
+USER_EMAIL="your-google-account@example.com"
+gcloud iam service-accounts add-iam-policy-binding \
+  "campaign-api@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --project="${PROJECT_ID}" \
+  --member="user:${USER_EMAIL}" \
+  --role="roles/iam.serviceAccountTokenCreator"
+```
+
+### 4. Sign in with ADC
+
+Use the same Google account for ADC login. Set the credentials path **after** login; this application's ID token library reads that path directly:
+
+```bash
+unset GOOGLE_APPLICATION_CREDENTIALS
+gcloud auth application-default login \
+  --impersonate-service-account="campaign-api@${PROJECT_ID}.iam.gserviceaccount.com"
+export GOOGLE_APPLICATION_CREDENTIALS="$(gcloud info --format='value(config.paths.global_config_dir)')/application_default_credentials.json"
+```
+
+### 5. Start the local API
+
+Login only saves credentials; it does not prove the ID token permission works. Load `.env`, check token creation without printing the token, then start the API:
+
+```bash
+set -a
+source .env
+set +a
+uv run python -c 'import os; from google.auth.transport.requests import Request; from google.oauth2 import id_token; id_token.fetch_id_token(Request(), os.environ["INFERENCE_AUDIENCE"]); print("ID token OK")'
+uv run uvicorn campaign_generator.api.app:app --port 8080
+```
+
+If the token check returns `iam.serviceAccounts.getOpenIdToken` 403, confirm that `USER_EMAIL` is the account used at ADC login and that its role binding is on the `campaign-api` service account. See [Google's ADC impersonation guide](https://docs.cloud.google.com/docs/authentication/set-up-adc-local-dev-environment).
+
+This local setup replaces your default ADC file with impersonated credentials. Before later Terraform, deployment, or destroy commands, run `unset GOOGLE_APPLICATION_CREDENTIALS && gcloud auth application-default login` to restore your own account's ADC.
+
+### 6. Use the demo
+
+Open [http://localhost:8080](http://localhost:8080) and submit a brief. `pyproject.toml` declares runtime, development, and training dependencies; the committed `uv.lock` pins their resolved versions. To add the training stack locally, run `uv sync --locked --extra training`. When dependency declarations change, run `uv lock` and commit both files.
 
 ## Dataset
 
-[`dataset/`](dataset/) is the single committed fine-tuning dataset: 240 records split 168/24/48, with a manifest, quality report, and 120 source briefs needed to regenerate v3. The training labels were generated by `gpt-6-luna` and passed schema validation; human semantic review is still pending. Its former immutable GCS copy was used for the documented run; cloud resources have since been removed. The dataset hash remains in the manifest.
+[`dataset/`](dataset/) is the single committed fine-tuning dataset: 240 records split 168/24/48, with a manifest, quality report, and 120 source briefs needed to regenerate v3. The training labels were generated by `gpt-6-luna` and passed schema validation; human semantic review is still pending. Its former immutable GCS copy was used for the documented run; cloud resources have since been removed. The version hash can be recalculated from the committed manifest.
 
 The v3 generator automatically uploads drafts to GCS staging. After schema validation or human review, it uploads the split files to an immutable `versions/<manifest-hash>` URI and removes staging. A failed upload leaves local files intact; `make upload-dataset` retries. Use `--no-upload` only for offline development.
 
@@ -38,6 +95,8 @@ make upload-dataset PROJECT_ID=campaign-generator-509812
 ```
 
 New runs write to ignored `data/processed/dataset-v3`; the committed dataset is not overwritten. Each upload verifies hashes and row counts. Source and teacher provenance are retained in the manifest and records.
+
+The upload prints `Dataset uploaded: gs://<project-id>-dataset/versions/<hash>`. Use that whole URI as `DATASET_URI` for training. The `<hash>` is the SHA-256 of `data/processed/dataset-v3/manifest.json` (the first value from `sha256sum data/processed/dataset-v3/manifest.json`), calculated after the final splits are prepared. Choose `RUN_ID` yourself for each training run, such as `lora-20260929-01`; it names the output folder under `gs://<project-id>-model-artifacts/runs/` and must be new for every run.
 
 ## Fine-tuning and evaluation
 

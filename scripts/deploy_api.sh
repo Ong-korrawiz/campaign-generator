@@ -1,12 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROJECT_ID="${1:?Usage: $0 PROJECT_ID API_IMAGE_DIGEST [REGION]}"
-API_IMAGE="${2:?Usage: $0 PROJECT_ID API_IMAGE_DIGEST [REGION]}"
+PROJECT_ID="${1:?Usage: $0 PROJECT_ID [API_IMAGE_DIGEST] [REGION]}"
+API_IMAGE="${2:-}"
 REGION="${3:-asia-southeast1}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+source "${SCRIPT_DIR}/api_image.sh"
 STATE_BUCKET="${PROJECT_ID}-tfstate"
+
+if [[ -z "${API_IMAGE}" ]]; then
+  IMAGE="$(api_image_tag "${PROJECT_ID}" "${REGION}" "${REPO_ROOT}")"
+  API_IMAGE="$(gcloud artifacts docker images describe "${IMAGE}" \
+    --project="${PROJECT_ID}" \
+    --format='value(image_summary.fully_qualified_digest)')" || {
+    echo "Unable to resolve the digest for ${IMAGE}; run make build-api first" >&2
+    exit 1
+  }
+  [[ -n "${API_IMAGE}" ]] || {
+    echo "No digest found for ${IMAGE}; run make build-api first" >&2
+    exit 1
+  }
+  printf 'Deploying %s\n' "${API_IMAGE}"
+fi
 
 export GOOGLE_OAUTH_ACCESS_TOKEN
 GOOGLE_OAUTH_ACCESS_TOKEN="$(gcloud auth print-access-token)"

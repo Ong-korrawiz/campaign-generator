@@ -10,7 +10,7 @@ resource "google_storage_bucket" "terraform_state" {
   location                    = var.region
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
-  force_destroy               = false
+  force_destroy               = var.force_destroy_state_bucket
 
   versioning {
     enabled = true

@@ -1,101 +1,73 @@
-# Campaign Generator Infrastructure
+# Infrastructure
 
-The infrastructure is split into bootstrap, platform, private serving, and public API Terraform states so each dependency can be created before the next service is deployed.
+Run these commands from the repository root. You need Terraform 1.12+, the Google Cloud CLI, a project with billing enabled, and Cloud Run L4 quota.
 
-## Target
+## 1. ADC
 
-- Project: supplied explicitly to every command
-- Default region: `asia-southeast1`
-- Baseline model: `Qwen/Qwen2.5-1.5B-Instruct`
-- Model revision: `989aa7980e4cf806f80c7fef2b1adb7bc71aa306`
-
-## Prerequisites
-
-Terraform 1.12+, Google Cloud CLI, an authenticated account with permission to enable services and create IAM/storage/Cloud Run/Vertex resources, an existing project with billing enabled, and Cloud Run L4 quota.
-
-## Deploy
-
-Each script in `scripts/` has a matching Make target. Run `make help` to see
-the commands and required variables.
+Sign in with an account that can manage the project's IAM, storage, Cloud Run, and Vertex resources. Terraform uses Application Default Credentials (ADC); the build scripts use the `gcloud` login.
 
 ```bash
 PROJECT_ID=campaign-generator-509812
 REGION=asia-southeast1
-
-# Bootstrap the state bucket first when setting up from a clean project.
-terraform -chdir=terraform/bootstrap init
-terraform -chdir=terraform/bootstrap apply -var="project_id=$PROJECT_ID" -var="region=$REGION"
-
-# Set terraform/platform/backend.hcl to the state bucket and prefix before init.
-terraform -chdir=terraform/platform init -backend-config=backend.hcl
-make apply-platform PROJECT_ID="$PROJECT_ID" REGION="$REGION"
-make build-inference PROJECT_ID="$PROJECT_ID" REGION="$REGION"
-make deploy-inference PROJECT_ID="$PROJECT_ID" REGION="$REGION" IMAGE_DIGEST="<digest printed by build-inference>"
+unset GOOGLE_APPLICATION_CREDENTIALS
+gcloud auth login
+gcloud auth application-default login
+gcloud auth application-default print-access-token >/dev/null
 ```
 
-The Make targets are thin wrappers; the implementation remains in the
-same-named shell script under `scripts/`.
+If Terraform reports `invalid_grant`, rerun `gcloud auth application-default login`. See [Google's Terraform authentication guide](https://docs.cloud.google.com/docs/terraform/authentication).
 
-The inference service is private. No `allUsers` IAM binding is created. Test as an authorized operator:
+The local API instructions in the main README create **impersonated** ADC credentials in the same default file. If you followed them, restore your own Google account's ADC before running any Terraform or `make deploy-demo`/`make destroy-*` command: `unset GOOGLE_APPLICATION_CREDENTIALS && gcloud auth application-default login`. The account you sign in with must have access to the project's Terraform state bucket and resources.
+
+## 2. Deploy demo
 
 ```bash
-URL="$(terraform -chdir=terraform/serving output -raw inference_url)"
-TOKEN="$(gcloud auth print-identity-token)"
-curl -H "Authorization: Bearer $TOKEN" "$URL/health"
-curl -H "Authorization: Bearer $TOKEN" "$URL/v1/models"
+make deploy-demo PROJECT_ID="$PROJECT_ID" REGION="$REGION"
 ```
 
-Run the complete smoke check with:
+Creates the Terraform state bucket and shared resources, builds and deploys private GPU inference and the public API, verifies both services, then prints the demo URL. Each operation reports `OK` or `FAILED`; the command stops on failure.
+
+To get the public demo URL again later, read it from Cloud Run using the `gcloud` login (no Terraform state or local ADC impersonation needed):
 
 ```bash
-make verify-inference PROJECT_ID="$PROJECT_ID" REGION="$REGION"
+gcloud run services describe campaign-api --project="$PROJECT_ID" --region="$REGION" --format='value(status.url)'
 ```
 
-An anonymous request must return HTTP 401 or 403.
+Open that URL in a browser. Visitors do not need GCP credentials.
 
-## Training plumbing
+## 3. Training
 
-Render `infra/training/custom-job.yaml.tpl` with `TRAINING_SERVICE_ACCOUNT`, `TRAINING_IMAGE_URI`, `DATASET_URI`, `OUTPUT_URI`, and `RUN_ID`, then submit it with:
+First prepare and upload a dataset using the [dataset steps](../README.md#dataset). The upload prints `Dataset uploaded: gs://<project-id>-dataset/versions/<64-character-hash>`. Copy the **entire URI** after `Dataset uploaded:` into `DATASET_URI`. The last part is the manifest hash: the SHA-256 hash of the generated `data/processed/dataset-v3/manifest.json` file. If you missed the printed URI, run `sha256sum data/processed/dataset-v3/manifest.json` and use its first value after `versions/`.
+
+Choose `RUN_ID` yourself for this training run; it names the output folder under `gs://$PROJECT_ID-model-artifacts/runs/`. Use a new value for every run, for example `lora-20260929-01`, so earlier results are not overwritten.
 
 ```bash
-gcloud ai custom-jobs create \
-  --project="$PROJECT_ID" \
-  --region="$REGION" \
-  --display-name="campaign-lora-$RUN_ID" \
-  --config=custom-job.yaml
+DATASET_URI="gs://$PROJECT_ID-dataset/versions/<manifest-hash-from-upload>"
+RUN_ID="lora-$(date -u +%Y%m%dT%H%M%SZ)"
+make train PROJECT_ID="$PROJECT_ID" REGION="$REGION" DATASET_URI="$DATASET_URI" RUN_ID="$RUN_ID"
 ```
 
-The template uses one Spot L4. Training code must checkpoint to `OUTPUT_URI` because Spot workers can be preempted.
+The `date` command above creates a new `RUN_ID` from the current UTC time. `make train` checks the uploaded dataset, builds the training image, resolves its digest, and submits a Vertex Spot L4 job. It returns after submission; training continues in Vertex.
 
-Build the pinned trainer image with `make build-training`. The v3 generator
-uploads drafts to GCS staging automatically. `make dataset-v3-schema-only`
-validates the splits and uploads an immutable training version; this keeps
-semantic review pending and is not promotion-ready. `make upload-dataset`
-retries a failed upload. The training job
-reads only train/validation; test remains reserved for final evaluation.
+## 4. Destroy
 
-## Public API
+If you used local service account impersonation, restore the deployment account's ADC as described in [Step 1](#1-adc) before destroying resources. An `iam.serviceAccounts.getAccessToken` 403 during `terraform init` means initialization stopped before any resource was deleted.
 
-After private inference is deployed, build and deploy the public CPU service:
+To remove each layer separately, run these commands in order:
 
 ```bash
-make build-api PROJECT_ID="$PROJECT_ID" REGION="$REGION"
-make deploy-api PROJECT_ID="$PROJECT_ID" REGION="$REGION" IMAGE_DIGEST="<api-image-digest>"
-make verify-api PROJECT_ID="$PROJECT_ID" REGION="$REGION"
+make destroy-api PROJECT_ID="$PROJECT_ID" REGION="$REGION"
+make destroy-inference PROJECT_ID="$PROJECT_ID" REGION="$REGION"
+make destroy-platform PROJECT_ID="$PROJECT_ID" REGION="$REGION"
+make destroy-state PROJECT_ID="$PROJECT_ID" REGION="$REGION"
 ```
 
-Terraform creates a separate `campaign-generator/api` state and exposes only
-the API. The serving stack grants `campaign-api` `roles/run.invoker` on the
-private inference service. The API uses the inference service base URL for
-both the HTTP endpoint and Google identity-token audience.
+`destroy-api` removes the public API; `destroy-inference` removes the private GPU service. `destroy-platform` removes shared resources and all dataset/model artifacts. `destroy-state` removes the versioned Terraform state bucket.
 
-## Cleanup
-
-For a future teardown, destroy API before serving, then platform, and bootstrap last. Empty the versioned state bucket only after all remote states have been saved, because it contains the state needed for Terraform cleanup.
+To run the same teardown in one command:
 
 ```bash
-terraform -chdir=terraform/api destroy
-terraform -chdir=terraform/serving destroy
-terraform -chdir=terraform/platform destroy
-terraform -chdir=terraform/bootstrap destroy
+make destroy-all PROJECT_ID="$PROJECT_ID" REGION="$REGION"
 ```
+
+`destroy-all` runs the four destroy steps in dependency order and permanently deletes Terraform-managed resources, dataset/model bucket contents, and state history. The GCP project and enabled APIs remain. Stop any active Vertex CustomJobs separately. Each operation reports `OK` or `FAILED` and stops on failure.
